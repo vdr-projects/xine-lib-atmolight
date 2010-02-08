@@ -1,0 +1,26 @@
+This package was debianized by Gerald Dachs <Gerald Dachs <gda@dachsweb.de>> on
+Mon, 28 Dec 2009 00:08:17 +0100.
+
+	It was downloaded from http://www.vdrportal.de/board/thread.php?threadid=88205&hilightuser=18772
+
+Upstream Author:
+
+	Andreas Auras <yak54@gmx.net>
+
+Copyright:
+
+	(C) 2009 Andreas Auras
+
+License:
+
+	and is licensed under the GPL version 2, 
+	see `/usr/share/common-licenses/GPL-2'.
+
+The Debian packaging is:
+
+	Copyright (C) 2009 Gerald Dachs <Gerald Dachs <gda@dachsweb.de>>
+
+	and is licensed under the GPL version 2, 
+	see `/usr/share/common-licenses/GPL-2'.
+
+

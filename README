@@ -1,0 +1,177 @@
+This is a "post plugin" for xine based media players.
+
+Written by: Andreas Auras (yak54@gmx.net)
+
+See the file COPYING for license information.
+
+Many ideas and algorithm for this plugin had been derived from the fantastic
+Atmolight-plugin for the Video Disk Recorder (VDR) that was developed by
+Eike Edener.
+
+
+Description:
+------------
+The "atmo" post plugin analyze the video picture and generates
+output data for so called "atmolight" controllers.
+
+For detailed informations about "atmolight" visit the VDR-Wiki:
+http://www.vdr-wiki.de/wiki/index.php/Atmo-plugin
+
+!!!NOTE!!!!
+Currently this plugin supports only grabbing of video from VDPAU
+enabled devices!
+
+
+Requirements:
+-------------
+
+xine-lib-vdpau or xine-lib-1.2 with vdpau support
+Both version must have the vdpau extension patches from here:
+http://www.vdr-portal.de/board/thread.php?threadid=86804
+
+For compiling the plugin the xine-lib and libusb-1.0 development
+files have to be installed. On debian based systems these are
+packages libxine-dev and libusb-1.0-0-dev.
+
+
+Compiling and installation:
+---------------------------
+
+make
+make install
+
+
+Configuration:
+--------------
+
+Load this plugin as a post plugin in your xine based media player.
+For the VDR xineliboutput player or xine-ui player add a command line option like this:
+
+--post=atmo:driver=classic,driver_param=/dev/ttyS0,top=1,bottom=1,left=1,right=1,center=1
+
+When using DF10CH controller(s):
+
+--post atmo:driver=df10ch
+
+
+Parameters understood by this plugin:
+-------------------------------------
+
+Parameter          Default          Description
+
+driver             none             Selects output driver. Currently supported are:
+
+                                    file     Write output data to file. Usefull for 
+                                             testing and debuging.
+                                           
+                                    classic  Send output data to serial port. Used
+                                             Protokoll is for "classic" Atmolight
+                                             2 channel controller. See:
+                                             http://www.vdr-wiki.de/wiki/index.php/Atmo-plugin
+                                             
+                                    df4ch    Send output data to serial port. Used
+                                             Protokoll is for my own designed 4 channel
+                                             controller.
+                                             
+                                    df10ch	 Send output data via libusb to my own designed 
+                                             DF10CH 10ch Controller(s).
+
+driver_param                        Parameter for output driver:
+
+                                    file:    File name of output file. If not specified
+                                             "xine_atmo_data.out" is used.
+                                             
+                                    classic, df4ch:
+                                             Path of serial device e.g. /dev/ttyS0
+                                             For users with usb-to-serial converters the
+                                             device could be specified as a regular expression
+                                             that is looked up in /proc/tty/driver/usbserial to
+                                             evaluate the /dev/ttyUSB device. The parameter must
+                                             start with "usb:" followed by the regular expression
+                                             e.g.: usb:pl2303.*usb-.*-[^6]
+
+                                    df10ch:
+                                             All connected controllers are scanned automatically. No 
+                                             parameter required here.
+
+top
+bottom
+left
+right
+center
+top_left
+top_right
+bottom_left
+bottom_right       0                Number of RGB channel groups per Area.
+                                    For top, bottom, left and right area more then one group could be
+                                    specified. This will be usefull when "next generation" controllers
+                                    like DF10CH are available. See the "aurora" project at:
+                                    http://www.vdr-portal.de/board/thread.php?threadid=71741&hilight=aurora
+                                    Valid values: 0 ... 25 for top, bottom, left, right
+                                    Valid values: 0 ... 1 for center, top_left, top_right, bottom_left, bottom_right
+
+                                    NOTE!!!: Starting from plugin version 0.3 for "classic" controllers you must define one
+                                    group for area top, bottom, left, right and center as plugin parameter!!!
+                                    
+                                    For DF10CH controller you do not have to specify these parameters here because they are read
+                                    from the controller configuration data. Use the DF10CH setup program to configure your
+                                    desired layout.
+                                    
+                                    
+analyze_rate       40               Rate of frame grabbing and video analysis. Unit milliseconds.
+                                    Valid values: 10 ... 500
+
+analyze_size       1                Size of analyze window. The window width is calculated by (analyze_size+1)*64 pixel.
+                                    The window height is calcuated aspect correct according to the grabbed video
+                                    window size. So a analyze size of 1 for a 16:9 video will give us a 128x72 pixel
+                                    analyze window.
+                                    Valid values: 0 ... 3
+
+overscan           30               Ignored overscan border of grabbed video frame.
+                                    Unit is percentage of 1000. e.g. 30 -> 3%
+                                    Valid values: 0 ... 200
+
+darkness_limit     50               Minimum brightness of pixel. Value's below are interpreted as black pixel.
+                                    Used to detect and skip "black borders" in video.
+                                    Valid values are 0 ... 100
+
+edge_weighting     8                Power of edge weighting. Valid values 1 ... 30
+
+hue_win_size       3                Windowing size for HUE. Valid values 0 ... 5
+
+sat_win_size       3                Windowing size for saturation. Valid values 0 ... 5
+
+filter             combined         Select's smoothness filter. Currently there are two filters
+                                    supported: percentage and combined.
+                                    Valid values: off, percentage, combined
+
+filter_smoothness  50               Controls filter smoothness of percentage filter.
+                                    Unit percentage of 100. Valid values 1 ... 100
+
+filter_length      500              Controls filter length of combined filter.
+                                    Unit milliseconds. Valid values 300 ... 5000
+
+filter_threshold   40               Controls filter threshold of combined filter.
+                                    Unit percentage of 100. Valid values 1 ... 100
+                                    
+brightness	       100              Controls brightness of generated color values.
+                                    Unit percentage of 100. Valid values 50 ... 300
+                                    Note: When using DF10CH controller(s) it is better to use the white calibration or
+                                    common brightness feature of the DF10CH setup program instead of this
+                                    parameter because you will lose lesser or no PWM resolution.
+
+wc_red
+wc_green
+wc_blue            255              White calibration values for red, green and blue channel.
+                                    Valid values 0 ... 255.
+                                    Note: When using DF10CH controller(s) it is better to use the white calibration 
+                                    feature of the DF10CH setup program instead of this parameter because you will
+                                    lose lesser PWM resolution.
+
+gamma              0                Gamma correction factor for red, green and blue channel.
+                                    Value is divided by 10 e.g. 25 -> gamma 2.5
+                                    Valid values 0 ... 50. 0 means no gamma correction
+                                    Note: When using DF10CH controller(s) it is better to use the gamma calibration 
+                                    feature of the DF10CH setup program instead of this parameter because you will
+                                    lose no PWM resolution.
+                                    
