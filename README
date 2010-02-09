@@ -16,6 +16,10 @@ output data for so called "atmolight" controllers.
 
 For detailed informations about "atmolight" visit the VDR-Wiki:
 http://www.vdr-wiki.de/wiki/index.php/Atmo-plugin
+http://www.vdr-wiki.de/wiki/index.php/DF10CH
+
+This project is hosted at:
+http://projects.vdr-developer.org/projects/show/xine-lib-atmolight
 
 !!!NOTE!!!!
 Currently this plugin supports only grabbing of video from VDPAU
@@ -156,6 +160,7 @@ filter_threshold   40               Controls filter threshold of combined filter
                                     
 brightness	       100              Controls brightness of generated color values.
                                     Unit percentage of 100. Valid values 50 ... 300
+                                    
                                     Note: When using DF10CH controller(s) it is better to use the white calibration or
                                     common brightness feature of the DF10CH setup program instead of this
                                     parameter because you will lose lesser or no PWM resolution.
@@ -164,6 +169,7 @@ wc_red
 wc_green
 wc_blue            255              White calibration values for red, green and blue channel.
                                     Valid values 0 ... 255.
+                                    
                                     Note: When using DF10CH controller(s) it is better to use the white calibration 
                                     feature of the DF10CH setup program instead of this parameter because you will
                                     lose lesser PWM resolution.
@@ -171,6 +177,7 @@ wc_blue            255              White calibration values for red, green and 
 gamma              0                Gamma correction factor for red, green and blue channel.
                                     Value is divided by 10 e.g. 25 -> gamma 2.5
                                     Valid values 0 ... 50. 0 means no gamma correction
+                                    
                                     Note: When using DF10CH controller(s) it is better to use the gamma calibration 
                                     feature of the DF10CH setup program instead of this parameter because you will
                                     lose no PWM resolution.

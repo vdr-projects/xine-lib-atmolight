@@ -1,10 +1,10 @@
 Source: libxine-atmo-plugin
 Section: libs
 Priority: extra
-Maintainer: Gerald Dachs <gda@dachsweb.de>
+Maintainer: Andreas Auras <yak54@gmx.net>
 Build-Depends: debhelper (>= 7), libxine-dev, libusb-1.0-0-dev
 Standards-Version: 3.8.3
-Homepage: http://www.vdrportal.de/board/thread.php?threadid=88205&hilightuser=18772
+Homepage: http://projects.vdr-developer.org/projects/show/xine-lib-atmolight
 
 Package: libxine-atmo-plugin
 Architecture: any
