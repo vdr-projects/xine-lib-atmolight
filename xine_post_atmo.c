@@ -464,14 +464,13 @@ static int calc_average_brightness(hsv_color_t *hsv, int img_size, const int dar
   uint64_t v_avg = 0;
 
   while (img_size--) {
-    if (hsv->v > darkness_limit) {
+    if (hsv->v > darkness_limit)
       v_avg += hsv->v;
-      ++n;
-    }
+    ++n;
     ++hsv;
   }
 
-  return (n ? (int)(v_avg / n): darkness_limit);
+  return (int)(v_avg / n);
 }
 
 
@@ -691,7 +690,6 @@ static void *atmo_grab_loop (void *port_gen) {
   _x_post_dec_usage(port);
 
   llprintf(LOG_1, "grab thread terminated\n");
-
   return NULL;
 }
 
@@ -1204,7 +1202,7 @@ static post_plugin_t *atmo_open_plugin(post_class_t *class_gen,
   this->parm.analyze_rate = 40;
   this->parm.analyze_size = 1;
   this->parm.brightness = 100;
-  this->parm.darkness_limit = 50;
+  this->parm.darkness_limit = 10;
   this->parm.edge_weighting = 8;
   this->parm.filter = 2;
   this->parm.filter_length = 500;

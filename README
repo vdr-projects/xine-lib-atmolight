@@ -135,7 +135,7 @@ overscan           30               Ignored overscan border of grabbed video fra
                                     Unit is percentage of 1000. e.g. 30 -> 3%
                                     Valid values: 0 ... 200
 
-darkness_limit     50               Minimum brightness of pixel. Value's below are interpreted as black pixel.
+darkness_limit     10               Minimum brightness of pixel. Value's below are interpreted as black pixel.
                                     Used to detect and skip "black borders" in video.
                                     Valid values are 0 ... 100
 
