@@ -181,4 +181,7 @@ gamma              0                Gamma correction factor for red, green and b
                                     Note: When using DF10CH controller(s) it is better to use the gamma calibration 
                                     feature of the DF10CH setup program instead of this parameter because you will
                                     lose no PWM resolution.
-                                    
+
+start_delay        250              Delay after stream start before first output is send [ms].
+                                    Valid values 0 ... 5000.
+                                            

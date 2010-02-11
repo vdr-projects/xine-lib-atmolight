@@ -94,6 +94,7 @@ typedef struct {
   int wc_green;
   int wc_blue;
   int gamma;
+  int start_delay;
 } atmo_parameters_t;
 
 
@@ -156,6 +157,8 @@ PARAM_ITEM(POST_PARAM_TYPE_INT, wc_blue, NULL, 0, 255, 0,
   "white calibration correction factor of blue color channel")
 PARAM_ITEM(POST_PARAM_TYPE_INT, gamma, NULL, 0, 30, 0,
   "gamma correction factor")
+PARAM_ITEM(POST_PARAM_TYPE_INT, start_delay, NULL, 0, 5000, 0,
+  "delay after stream start before first output is send [ms]")
 END_PARAM_DESCR(atmo_param_descr)
 
 
@@ -866,7 +869,7 @@ static void *atmo_output_loop (void *port_gen) {
       /* Output colors */
     gettimeofday(&tvnow, NULL);
     timersub(&tvnow, &tvfirst, &tvdiff);
-    if ((tvdiff.tv_sec * 1000 + tvdiff.tv_usec / 1000) >= OUTPUT_START_DELAY) {
+    if ((tvdiff.tv_sec * 1000 + tvdiff.tv_usec / 1000) >= this->parm.start_delay) {
         if (memcmp(this->output_colors, this->last_output_colors, colors_size)) {
           output_driver->output_colors(output_driver, this->output_colors, this->last_output_colors);
           memcpy(this->last_output_colors, this->output_colors, colors_size);
@@ -1214,6 +1217,7 @@ static post_plugin_t *atmo_open_plugin(post_class_t *class_gen,
   this->parm.wc_green = 255;
   this->parm.wc_blue = 255;
   this->parm.gamma = 0;
+  this->parm.start_delay = 250;
 
   return &this->post_plugin;
 }
