@@ -24,9 +24,11 @@
 #include <fcntl.h>
 #include <math.h>
 
-#define NUM_AREAS       9       // Number of different areas (top, bottom ...)
+#define NUM_AREAS       9       /* Number of different areas (top, bottom ...) */
 
 typedef struct { int sum, top, bottom, left, right, center, top_left, top_right, bottom_left, bottom_right; } num_channels_t;
+
+extern long int lround(double); /* Missing in math.h? */
 
 
 /*
@@ -684,6 +686,9 @@ static int df10ch_driver_open(output_driver_t *this_gen, const char *param, num_
     return -1;
   }
 
+    // Ignore channel configuration defined by plugin parameters
+  memset(num_channels, 0, sizeof(num_channels_t));
+
     // Read controller configuration
   df10ch_ctrl_t *ctrl = this->ctrls;
   while (ctrl) {
@@ -837,24 +842,16 @@ static int df10ch_driver_open(output_driver_t *this_gen, const char *param, num_
 static int df10ch_driver_configure(output_driver_t *this_gen, num_channels_t *num_channels) {
   df10ch_output_driver_t *this = (df10ch_output_driver_t *) this_gen;
 
-  if (num_channels->top < this->num_channels.top)
-    num_channels->top = this->num_channels.top;
-  if (num_channels->bottom < this->num_channels.bottom)
-    num_channels->bottom = this->num_channels.bottom;
-  if (num_channels->left < this->num_channels.left)
-    num_channels->left = this->num_channels.left;
-  if (num_channels->right < this->num_channels.right)
-    num_channels->right = this->num_channels.right;
-  if (num_channels->center < this->num_channels.center)
-    num_channels->center = this->num_channels.center;
-  if (num_channels->top_left < this->num_channels.top_left)
-    num_channels->top_left = this->num_channels.top_left;
-  if (num_channels->top_right < this->num_channels.top_right)
-    num_channels->top_right = this->num_channels.top_right;
-  if (num_channels->bottom_left < this->num_channels.bottom_left)
-    num_channels->bottom_left = this->num_channels.bottom_left;
-  if (num_channels->bottom_right < this->num_channels.bottom_right)
-    num_channels->bottom_right = this->num_channels.bottom_right;
+    // Ignore channel configuration defined by plugin parameters
+  num_channels->top = this->num_channels.top;
+  num_channels->bottom = this->num_channels.bottom;
+  num_channels->left = this->num_channels.left;
+  num_channels->right = this->num_channels.right;
+  num_channels->center = this->num_channels.center;
+  num_channels->top_left = this->num_channels.top_left;
+  num_channels->top_right = this->num_channels.top_right;
+  num_channels->bottom_left = this->num_channels.bottom_left;
+  num_channels->bottom_right = this->num_channels.bottom_right;
 
   this->num_channels = *num_channels;
   return 0;

@@ -1,0 +1,23 @@
+--- Version 0.5
+
+Added storage of actual plugin parameters into xine configuration key 'post.atmo.parameters'.
+Added support for "on the fly" parameter changes.
+Added 'start_delay' plugin parameter for individual adjustment of start delay after start of new stream.
+Changed start delay default from 1000ms to 250ms
+Added 'enable' plugin parameter for switching the atmolight on/off on the fly.
+DF10CH channel layout configuration parameters are now mandatory.
+
+--- Version 0.4
+
+Fixed calculation of mean brightness value.
+Changed default value of 'darkness' plugin parameter from 50 to 10.
+ 
+--- Version 0.3
+
+Added DF10CH Atmolight controller output driver.
+Added new areas 'center', 'top_left', 'top_right', 'bottom_left', 'bottom_right'.
+Added 'center' channel support for classic controller output driver.
+Added start delay of 1000ms for output of color values after start of new stream.
+Added support for building debian installation packages.
+
+

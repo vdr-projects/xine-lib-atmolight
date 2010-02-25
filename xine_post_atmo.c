@@ -26,6 +26,8 @@
 
 #include <stdio.h>
 #include <stdint.h>
+#include <stdlib.h>
+#include <ctype.h>
 #include <unistd.h>
 #include <pthread.h>
 #include <math.h>
@@ -41,7 +43,6 @@
 
 
 #define OUTPUT_RATE     20      /* rate of output loop [ms] */
-#define OUTPUT_START_DELAY 1000    /* delay after video open for first send output packet [ms] */
 #define GRAB_TIMEOUT    100     /* max. time waiting for next grab image [ms] */
 
 
@@ -67,6 +68,7 @@ typedef struct { uint64_t r, g, b; } rgb_color_sum_t;
  */
 
 typedef struct {
+  int enabled;
   int driver;
   char driver_param[256];
   int top;
@@ -103,6 +105,8 @@ static char *filter_enum[NUM_FILTERS+1] = { "off", "percentage", "combined" };
 
 
 START_PARAM_DESCR(atmo_parameters_t)
+PARAM_ITEM(POST_PARAM_TYPE_BOOL, enabled, NULL, 0, 1, 0,
+  "enable plugin")
 PARAM_ITEM(POST_PARAM_TYPE_INT, driver, driver_enum, 0, NUM_DRIVERS, 0,
   "output driver")
 PARAM_ITEM(POST_PARAM_TYPE_CHAR, driver_param, NULL, 0, 0, 0,
@@ -162,19 +166,27 @@ PARAM_ITEM(POST_PARAM_TYPE_INT, start_delay, NULL, 0, 5000, 0,
 END_PARAM_DESCR(atmo_param_descr)
 
 
+typedef struct {
+  post_class_t post_class;
+  xine_t *xine;
+} atmo_post_class_t;
+
+
 typedef struct atmo_post_plugin_s
 {
     /* xine related */
   post_plugin_t post_plugin;
   xine_post_in_t parameter_input;
   atmo_parameters_t parm;
-  void (*port_open)(xine_video_port_t *port_gen, xine_stream_t *stream);
-  void (*port_close)(xine_video_port_t *port_gen, xine_stream_t *stream);
+  atmo_parameters_t default_parm;
+  post_video_port_t *port;
+  pthread_mutex_t port_lock;
 
     /* channel configuration related */
   num_channels_t num_channels;
 
   /* thread related */
+  int runable;
   int *grab_running, *output_running;
   pthread_t grab_thread, output_thread;
   pthread_mutex_t lock;
@@ -200,6 +212,140 @@ typedef struct atmo_post_plugin_s
   rgb_color_sum_t *mean_filter_sum_values;
   int old_mean_length;
 } atmo_post_plugin_t;
+
+
+static int build_post_api_parameter_string(char *buf, int size, xine_post_api_descr_t *descr, void *values, void *defaults) {
+  xine_post_api_parameter_t *p = descr->parameter;
+  int sep = 0;
+  char arg[512];
+
+  while (p->type != POST_PARAM_TYPE_LAST) {
+    if (!p->readonly) {
+      char *v = (char *)values + p->offset;
+      char *d = (char *)defaults + p->offset;
+      arg[0] = 0;
+      switch (p->type) {
+      case POST_PARAM_TYPE_INT:
+      case POST_PARAM_TYPE_BOOL:
+        if (*((int *)v) != *((int *)d))
+          snprintf(arg, sizeof(arg), "%s=%d", p->name, *((int *)v));
+        break;
+      case POST_PARAM_TYPE_DOUBLE:
+        if (*((double *)v) != *((double *)d))
+          snprintf(arg, sizeof(arg), "%s=%f", p->name, *((double *)v));
+        break;
+      case POST_PARAM_TYPE_CHAR:
+        if (strncmp(v, d, p->size))
+          snprintf(arg, sizeof(arg), "%s=%.*s", p->name, p->size, v);
+        break;
+      }
+      if (arg[0]) {
+        int n = strlen(arg) + sep;
+        if (size < n)
+          break;
+        if (sep)
+          *buf++ = ',';
+        strcpy(buf, arg);
+        buf += n;
+        sep = 1;
+      }
+    }
+    ++p;
+  }
+  *buf = 0;
+  return (sep);
+}
+
+
+static int parse_post_api_parameter_string(xine_post_api_descr_t *descr, void *values, char *param) {
+  xine_post_api_parameter_t *p = descr->parameter;
+  int changed = 0;
+
+  while (p->type != POST_PARAM_TYPE_LAST) {
+    if (!p->readonly) {
+      char *arg = strstr(param, p->name);
+      if (arg && arg[strlen(p->name)] == '=') {
+        arg += strlen(p->name) + 1;
+        char *v = (char *)values + p->offset;
+        int iv;
+        double dv;
+        switch (p->type) {
+        case POST_PARAM_TYPE_INT:
+        case POST_PARAM_TYPE_BOOL:
+          iv = atoi(arg);
+          if (iv != *((int *)v)) {
+            *((int *)v) = iv;
+            changed = 1;
+          }
+          break;
+        case POST_PARAM_TYPE_DOUBLE:
+          dv = atof(arg);
+          if (dv != *((double *)v)) {
+            *((double *)v) = dv;
+            changed = 1;
+          }
+          break;
+        case POST_PARAM_TYPE_CHAR:
+          while (isspace(*arg))
+            ++arg;
+          char *e = strchr(arg, ',');
+          if (!e)
+            e = arg + strlen(arg);
+          while (e > arg && isspace(e[-1]))
+            --e;
+          int l = e - arg;
+          if (l < (p->size - 1)) {
+            if (l != strlen(v) || memcmp(arg, v, l)) {
+              memset(v, 0, p->size);
+              memcpy(v, arg, l);
+              changed = 1;
+            }
+          }
+          break;
+        }
+      }
+    }
+    ++p;
+  }
+  return (changed);
+}
+
+
+static int join_post_api_parameters(xine_post_api_descr_t *descr, void *dst, void *src) {
+  xine_post_api_parameter_t *p = descr->parameter;
+  int changed = 0;
+
+  while (p->type != POST_PARAM_TYPE_LAST) {
+    if (!p->readonly) {
+      char *s = (char *)src + p->offset;
+      char *d = (char *)dst + p->offset;
+
+      switch (p->type) {
+      case POST_PARAM_TYPE_INT:
+      case POST_PARAM_TYPE_BOOL:
+        if (*((int *)d) != *((int *)s)) {
+          *((int *)d) = *((int *)s);
+          changed = 1;
+        }
+        break;
+      case POST_PARAM_TYPE_DOUBLE:
+        if (*((double *)d) != *((double *)s)) {
+          *((double *)d) = *((double *)s);
+          changed = 1;
+        }
+        break;
+      case POST_PARAM_TYPE_CHAR:
+        if (strncmp(d, s, p->size)) {
+          memcpy(d, s, p->size);
+          changed = 1;
+        }
+        break;
+      }
+    }
+    ++p;
+  }
+  return (changed);
+}
 
 
 static inline void rgb_to_hsv(hsv_color_t *hsv, int r, int g, int b) {
@@ -541,9 +687,9 @@ static void calc_rgb_values(atmo_post_plugin_t *this, int v_avg)
 }
 
 
-static void *atmo_grab_loop (void *port_gen) {
-  post_video_port_t *port = (post_video_port_t *) port_gen;
-  atmo_post_plugin_t *this = (atmo_post_plugin_t *) port->post;
+static void *atmo_grab_loop (void *this_gen) {
+  atmo_post_plugin_t *this = (atmo_post_plugin_t *) this_gen;
+  post_video_port_t *port = this->port;
   xine_video_port_t *video_port = port->original_port;
   xine_ticket_t *ticket = this->post_plugin.running_ticket;
   xine_grab_frame_t *frame = NULL;
@@ -728,7 +874,8 @@ static void mean_filter(atmo_post_plugin_t *this) {
   const int old_p = this->parm.filter_smoothness;
   const int new_p = 100 - old_p;
   int n = this->num_channels.sum;
-  const int64_t mean_length = (this->parm.filter_length < OUTPUT_RATE) ? 1: this->parm.filter_length / OUTPUT_RATE;
+  const int filter_length = this->parm.filter_length;
+  const int64_t mean_length = (filter_length < OUTPUT_RATE) ? 1: filter_length / OUTPUT_RATE;
   const int reinitialize = ((int)mean_length != this->old_mean_length);
   this->old_mean_length = (int)mean_length;
 
@@ -796,10 +943,11 @@ static void apply_white_calibration(atmo_post_plugin_t *this) {
 
 
 static void apply_gamma_correction(atmo_post_plugin_t *this) {
-  if (!this->parm.gamma)
+  const int igamma = this->parm.gamma;
+  if (igamma <= 10)
     return;
 
-  const double gamma = (double)this->parm.gamma / 10.0;
+  const double gamma = (double)igamma / 10.0;
   rgb_color_t *out = this->output_colors;
   int n = this->num_channels.sum;
   while (n--) {
@@ -811,9 +959,9 @@ static void apply_gamma_correction(atmo_post_plugin_t *this) {
 }
 
 
-static void *atmo_output_loop (void *port_gen) {
-  post_video_port_t *port = (post_video_port_t *) port_gen;
-  atmo_post_plugin_t *this = (atmo_post_plugin_t *) port->post;
+static void *atmo_output_loop (void *this_gen) {
+  atmo_post_plugin_t *this = (atmo_post_plugin_t *) this_gen;
+  post_video_port_t *port = this->port;
   xine_ticket_t *ticket = this->post_plugin.running_ticket;
   output_driver_t *output_driver = this->output_driver;
   int colors_size = this->num_channels.sum * sizeof(rgb_color_t);
@@ -837,6 +985,12 @@ static void *atmo_output_loop (void *port_gen) {
   while (running) {
 
     if (ticket->ticket_revoked) {
+        /* Turn off Light */
+      memset(this->output_colors, 0, colors_size);
+      if (memcmp(this->output_colors, this->last_output_colors, colors_size)) {
+        output_driver->output_colors(output_driver, this->output_colors, this->last_output_colors);
+        memset(this->last_output_colors, 0, colors_size);
+      }
       reset_filters(this);
       llprintf(LOG_1, "output thread waiting for new ticket\n");
       ticket->renew(ticket, 0);
@@ -883,12 +1037,6 @@ static void *atmo_output_loop (void *port_gen) {
     if (tvdiff.tv_sec == 0 && tvdiff.tv_usec < output_rate)
       usleep(output_rate - tvdiff.tv_usec);
   }
-
-    /* Turn off Light */
-  memset(this->output_colors, 0, colors_size);
-  if (memcmp(this->output_colors, this->last_output_colors, colors_size))
-    output_driver->output_colors(output_driver, this->output_colors, this->last_output_colors);
-  memset(this->last_output_colors, 0, colors_size);
 
   ticket->release(ticket, 0);
 
@@ -958,7 +1106,7 @@ static void free_channels(atmo_post_plugin_t *this) {
 }
 
 
-static void start_threads(atmo_post_plugin_t *this, post_video_port_t *port) {
+static void start_threads(atmo_post_plugin_t *this) {
   int err;
   pthread_attr_t pth_attrs;
 
@@ -968,14 +1116,14 @@ static void start_threads(atmo_post_plugin_t *this, post_video_port_t *port) {
 
   pthread_mutex_lock(&this->lock);
   if (this->grab_running == NULL) {
-    if ((err = pthread_create (&this->grab_thread, &pth_attrs, atmo_grab_loop, port)))
+    if ((err = pthread_create (&this->grab_thread, &pth_attrs, atmo_grab_loop, this)))
       xprintf(this->post_plugin.xine, XINE_VERBOSITY_LOG, "atmo: can't create grab thread (%s)\n", strerror(err));
     else
       pthread_cond_wait(&this->thread_started, &this->lock);
   }
 
   if (this->output_running == NULL) {
-    if ((err = pthread_create (&this->output_thread, &pth_attrs, atmo_output_loop, port)))
+    if ((err = pthread_create (&this->output_thread, &pth_attrs, atmo_output_loop, this)))
       xprintf(this->post_plugin.xine, XINE_VERBOSITY_LOG, "atmo: can't create output thread (%s)\n", strerror(err));
     else
       pthread_cond_wait(&this->thread_started, &this->lock);
@@ -1011,7 +1159,100 @@ static void close_output_driver(atmo_post_plugin_t *this) {
 
     this->output_driver->close(this->output_driver);
     this->driver_opened = 0;
+    this->runable = 0;
     llprintf(LOG_1, "output driver closed\n");
+  }
+}
+
+
+static void open_output_driver(atmo_post_plugin_t *this) {
+
+  this->runable = 0;
+  if (!this->parm.enabled || this->driver != this->parm.driver || strcmp(this->driver_param, this->parm.driver_param))
+    close_output_driver(this);
+
+  if (this->parm.enabled) {
+    num_channels_t num_channels;
+    int start = 1, configure = 0;
+
+    if (this->num_channels.top != this->parm.top ||
+                    this->num_channels.bottom != this->parm.bottom ||
+                    this->num_channels.left != this->parm.left ||
+                    this->num_channels.right != this->parm.right ||
+                    this->num_channels.center != this->parm.center ||
+                    this->num_channels.top_left != this->parm.top_left ||
+                    this->num_channels.top_right != this->parm.top_right ||
+                    this->num_channels.bottom_left != this->parm.bottom_left ||
+                    this->num_channels.bottom_right != this->parm.bottom_right) {
+      configure = 1;
+    }
+
+    num_channels.top = this->parm.top;
+    num_channels.bottom = this->parm.bottom;
+    num_channels.left = this->parm.left;
+    num_channels.right = this->parm.right;
+    num_channels.center = this->parm.center;
+    num_channels.top_left = this->parm.top_left;
+    num_channels.top_right = this->parm.top_right;
+    num_channels.bottom_left = this->parm.bottom_left;
+    num_channels.bottom_right = this->parm.bottom_right;
+
+      /* open output driver */
+    if (!this->driver_opened) {
+      this->driver = this->parm.driver;
+      strcpy(this->driver_param, this->parm.driver_param);
+
+      if ((this->output_driver = get_output_driver(&this->output_drivers, this->driver)) == NULL) {
+        xine_log(this->post_plugin.xine, XINE_LOG_PLUGIN, "atmo: no valid output driver selected!\n");
+        start = 0;
+      } else if (this->output_driver->open(this->output_driver, this->driver_param, &num_channels)) {
+        xine_log(this->post_plugin.xine, XINE_LOG_PLUGIN, "atmo: can't open output driver: %s!\n", this->output_driver->errmsg);
+        start = 0;
+      } else {
+        this->driver_opened = 1;
+        llprintf(LOG_1, "output driver opened\n");
+      }
+    } else if (configure) {
+      if (this->output_driver->configure(this->output_driver, &num_channels)) {
+        xine_log(this->post_plugin.xine, XINE_LOG_PLUGIN, "atmo: can't configure output driver: %s!\n", this->output_driver->errmsg);
+        start = 0;
+      }
+    }
+
+    if (this->num_channels.top != num_channels.top ||
+                    this->num_channels.bottom != num_channels.bottom ||
+                    this->num_channels.left != num_channels.left ||
+                    this->num_channels.right != num_channels.right ||
+                    this->num_channels.center != num_channels.center ||
+                    this->num_channels.top_left != num_channels.top_left ||
+                    this->num_channels.top_right != num_channels.top_right ||
+                    this->num_channels.bottom_left != num_channels.bottom_left ||
+                    this->num_channels.bottom_right != num_channels.bottom_right) {
+      free_channels(this);
+      this->num_channels = num_channels;
+      config_channels(this);
+    }
+
+    this->parm.top = num_channels.top;
+    this->parm.bottom = num_channels.bottom;
+    this->parm.left = num_channels.left;
+    this->parm.right = num_channels.right;
+    this->parm.center = num_channels.center;
+    this->parm.top_left = num_channels.top_left;
+    this->parm.top_right = num_channels.top_right;
+    this->parm.bottom_left = num_channels.bottom_left;
+    this->parm.bottom_right = num_channels.bottom_right;
+
+    if (!this->num_channels.sum)
+      start = 0;
+
+    if (start) {
+        /* send first initial color packet */
+      this->output_driver->output_colors(this->output_driver, this->output_colors, NULL);
+
+      this->runable = 1;
+      start_threads(this);
+    }
   }
 }
 
@@ -1023,67 +1264,16 @@ static void close_output_driver(atmo_post_plugin_t *this) {
 static void atmo_video_open(xine_video_port_t *port_gen, xine_stream_t *stream) {
   post_video_port_t *port = (post_video_port_t *)port_gen;
   atmo_post_plugin_t *this = (atmo_post_plugin_t *) port->post;
-  num_channels_t num_channels;
-  int start = 1;
 
-  this->port_open(port_gen, stream);
+  _x_post_rewire(port->post);
+  _x_post_inc_usage(port);
 
-  num_channels.top = this->parm.top;
-  num_channels.bottom = this->parm.bottom;
-  num_channels.left = this->parm.left;
-  num_channels.right = this->parm.right;
-  num_channels.center = this->parm.center;
-  num_channels.top_left = this->parm.top_left;
-  num_channels.top_right = this->parm.top_right;
-  num_channels.bottom_left = this->parm.bottom_left;
-  num_channels.bottom_right = this->parm.bottom_right;
-
-  if (this->driver != this->parm.driver || strcmp(this->driver_param, this->parm.driver_param))
-    close_output_driver(this);
-
-    /* open output driver */
-  if (!this->driver_opened) {
-    this->driver = this->parm.driver;
-    strcpy(this->driver_param, this->parm.driver_param);
-
-    if ((this->output_driver = get_output_driver(&this->output_drivers, this->driver)) == NULL) {
-      xine_log(this->post_plugin.xine, XINE_LOG_PLUGIN, "atmo: no valid output driver selected!\n");
-      start = 0;
-    } else if (this->output_driver->open(this->output_driver, this->driver_param, &num_channels)) {
-      xine_log(this->post_plugin.xine, XINE_LOG_PLUGIN, "atmo: can't open output driver: %s!\n", this->output_driver->errmsg);
-      start = 0;
-    } else {
-      this->driver_opened = 1;
-      llprintf(LOG_1, "output driver opened\n");
-    }
-  } else if (this->output_driver->configure(this->output_driver, &num_channels)) {
-    xine_log(this->post_plugin.xine, XINE_LOG_PLUGIN, "atmo: can't configure output driver: %s!\n", this->output_driver->errmsg);
-    start = 0;
-  }
-
-  if (this->num_channels.top != num_channels.top ||
-                  this->num_channels.bottom != num_channels.bottom ||
-                  this->num_channels.left != num_channels.left ||
-                  this->num_channels.right != num_channels.right ||
-                  this->num_channels.center != num_channels.center ||
-                  this->num_channels.top_left != num_channels.top_left ||
-                  this->num_channels.top_right != num_channels.top_right ||
-                  this->num_channels.bottom_left != num_channels.bottom_left ||
-                  this->num_channels.bottom_right != num_channels.bottom_right) {
-    free_channels(this);
-    this->num_channels = num_channels;
-    config_channels(this);
-  }
-
-  if (!this->num_channels.sum)
-    start = 0;
-
-  if (start) {
-      /* send first initial color packet */
-    this->output_driver->output_colors(this->output_driver, this->output_colors, NULL);
-
-    start_threads(this, port);
-  }
+  pthread_mutex_lock(&this->port_lock);
+  (port->original_port->open) (port->original_port, stream);
+  port->stream = stream;
+  this->port = port;
+  open_output_driver(this);
+  pthread_mutex_unlock(&this->port_lock);
 }
 
 
@@ -1091,9 +1281,14 @@ static void atmo_video_close(xine_video_port_t *port_gen, xine_stream_t *stream)
   post_video_port_t *port = (post_video_port_t *)port_gen;
   atmo_post_plugin_t *this = (atmo_post_plugin_t *) port->post;
 
+  pthread_mutex_lock(&this->port_lock);
   stop_threads(this);
+  this->port = NULL;
+  port->original_port->close(port->original_port, stream);
+  port->stream = NULL;
+  pthread_mutex_unlock(&this->port_lock);
 
-  this->port_close(port_gen, stream);
+  _x_post_dec_usage(port);
 }
 
 
@@ -1110,10 +1305,27 @@ static xine_post_api_descr_t *atmo_get_param_descr(void)
 static int atmo_set_parameters(xine_post_t *this_gen, void *parm_gen)
 {
   atmo_post_plugin_t *this = (atmo_post_plugin_t *)this_gen;
-  atmo_parameters_t *parm = (atmo_parameters_t *)parm_gen;
+  int enabled = this->parm.enabled;
 
-  this->parm = *parm;
-  llprintf(LOG_1, "set parameters\n");
+  if (join_post_api_parameters(&atmo_param_descr, &this->parm, parm_gen)) {
+    char buf[512];
+    build_post_api_parameter_string(buf, sizeof(buf), &atmo_param_descr, &this->parm, &this->default_parm);
+    this->post_plugin.xine->config->update_string(this->post_plugin.xine->config, "post.atmo.parameters", buf);
+    llprintf(LOG_1, "set parameters\n");
+
+    pthread_mutex_lock(&this->port_lock);
+    if (this->runable) {
+      if (this->parm.enabled) {
+        if (!enabled)
+          start_threads(this);
+      } else {
+        if (enabled)
+          stop_threads(this);
+      }
+    }
+    pthread_mutex_unlock(&this->port_lock);
+  }
+
   return 1;
 }
 
@@ -1148,6 +1360,7 @@ static void atmo_dispose(post_plugin_t *this_gen)
     close_output_driver(this);
     free_channels(this);
     pthread_mutex_destroy(&this->lock);
+    pthread_mutex_destroy(&this->port_lock);
     pthread_cond_destroy(&this->thread_started);
     free(this);
   }
@@ -1159,6 +1372,7 @@ static post_plugin_t *atmo_open_plugin(post_class_t *class_gen,
 					    xine_audio_port_t **audio_target,
 					    xine_video_port_t **video_target)
 {
+  atmo_post_class_t *class = (atmo_post_class_t *) class_gen;
   post_in_t *input;
   post_out_t *output;
   post_video_port_t *port;
@@ -1175,6 +1389,7 @@ static post_plugin_t *atmo_open_plugin(post_class_t *class_gen,
     return NULL;
 
   _x_post_init(&this->post_plugin, 0, 1);
+  this->post_plugin.xine = class->xine;
 
   port = _x_post_intercept_video_port(&this->post_plugin, video_target[0], &input, &output);
 
@@ -1183,10 +1398,9 @@ static post_plugin_t *atmo_open_plugin(post_class_t *class_gen,
 
   this->post_plugin.dispose = atmo_dispose;
 
-  this->port_open = port->new_port.open;
-  this->port_close = port->new_port.close;
   port->new_port.open = atmo_video_open;
   port->new_port.close = atmo_video_close;
+  port->port_lock = &this->port_lock;
 
   this->post_plugin.xine_post.video_input[0] = &port->new_port;
 
@@ -1198,9 +1412,11 @@ static post_plugin_t *atmo_open_plugin(post_class_t *class_gen,
 
   this->driver = -1;
   pthread_mutex_init(&this->lock, NULL);
+  pthread_mutex_init(&this->port_lock, NULL);
   pthread_cond_init(&this->thread_started, NULL);
 
     /* Set default values for parameters */
+  this->parm.enabled = 1;
   this->parm.overscan = 30;
   this->parm.analyze_rate = 40;
   this->parm.analyze_size = 1;
@@ -1218,6 +1434,20 @@ static post_plugin_t *atmo_open_plugin(post_class_t *class_gen,
   this->parm.wc_blue = 255;
   this->parm.gamma = 0;
   this->parm.start_delay = 250;
+  this->default_parm = this->parm;
+
+    /* Read parameters from xine configuration file */
+  config_values_t *config = this->post_plugin.xine->config;
+  char *param = config->register_string (config, "post.atmo.parameters", "",
+                                                  "Parameters of atmo post plugin",
+                                                  NULL, 20, NULL, NULL);
+  if (param)
+    parse_post_api_parameter_string(&atmo_param_descr, &this->parm, param);
+
+  char buf[512];
+  build_post_api_parameter_string(buf, sizeof(buf), &atmo_param_descr, &this->parm, &this->default_parm);
+  if (!param || strcmp(param, buf))
+    config->update_string(config, "post.atmo.parameters", buf);
 
   return &this->post_plugin;
 }
@@ -1246,21 +1476,22 @@ static void atmo_class_dispose(post_class_t *class_gen)
 
 static void *atmo_init_plugin(xine_t *xine, void *data)
 {
-  post_class_t *class = (post_class_t *) calloc(1, sizeof(post_class_t));
+  atmo_post_class_t *class = (atmo_post_class_t *) calloc(1, sizeof(atmo_post_class_t));
 
   if(class) {
-    class->open_plugin     = atmo_open_plugin;
+    class->xine = xine;
+    class->post_class.open_plugin     = atmo_open_plugin;
 #if POST_PLUGIN_IFACE_VERSION < 10
-    class->get_identifier  = atmo_get_identifier;
-    class->get_description = atmo_get_description;
-    class->dispose         = atmo_class_dispose;
+    class->post_class.get_identifier  = atmo_get_identifier;
+    class->post_class.get_description = atmo_get_description;
+    class->post_class.dispose         = atmo_class_dispose;
 #else
-    class->identifier      = "atmo";
-    class->description     = N_("Analyze video picture and generate output data for atmolight controllers");
-    class->dispose         = default_post_class_dispose;
+    class->post_class.identifier      = "atmo";
+    class->post_class.description     = N_("Analyze video picture and generate output data for atmolight controllers");
+    class->post_class.dispose         = default_post_class_dispose;
 #endif
   }
-  return class;
+  return &class->post_class;
 }
 
 

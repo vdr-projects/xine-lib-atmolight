@@ -1,3 +1,10 @@
+libxine-atmo-plugin (0.5-0) karmic; urgency=low
+
+  * New upstream release
+  * Added HISTORY file to docs
+
+ -- Andreas Auras <yak54@gmx.net>  Thu, 25 Feb 2010 13:24:46 +0100
+
 libxine-atmo-plugin (0.4-0) karmic; urgency=low
 
   * New upstream release
