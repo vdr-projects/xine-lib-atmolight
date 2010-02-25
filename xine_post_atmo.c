@@ -42,8 +42,9 @@
 #define LOG_2           0
 
 
-#define OUTPUT_RATE     20      /* rate of output loop [ms] */
-#define GRAB_TIMEOUT    100     /* max. time waiting for next grab image [ms] */
+#define OUTPUT_RATE                     20     /* rate of output loop [ms] */
+#define GRAB_TIMEOUT                   100     /* max. time waiting for next grab image [ms] */
+#define THREAD_TERMINATION_WAIT_TIME   150     /* time waiting for thread termination [ms] */
 
 
 /* accuracy of color calculation */
@@ -186,7 +187,6 @@ typedef struct atmo_post_plugin_s
   num_channels_t num_channels;
 
   /* thread related */
-  int runable;
   int *grab_running, *output_running;
   pthread_t grab_thread, output_thread;
   pthread_mutex_t lock;
@@ -244,9 +244,10 @@ static int build_post_api_parameter_string(char *buf, int size, xine_post_api_de
         if (size < n)
           break;
         if (sep)
-          *buf++ = ',';
-        strcpy(buf, arg);
+          *buf = ',';
+        strcpy(buf + sep, arg);
         buf += n;
+        size -= n;
         sep = 1;
       }
     }
@@ -985,12 +986,6 @@ static void *atmo_output_loop (void *this_gen) {
   while (running) {
 
     if (ticket->ticket_revoked) {
-        /* Turn off Light */
-      memset(this->output_colors, 0, colors_size);
-      if (memcmp(this->output_colors, this->last_output_colors, colors_size)) {
-        output_driver->output_colors(output_driver, this->output_colors, this->last_output_colors);
-        memset(this->last_output_colors, 0, colors_size);
-      }
       reset_filters(this);
       llprintf(LOG_1, "output thread waiting for new ticket\n");
       ticket->renew(ticket, 0);
@@ -1036,6 +1031,13 @@ static void *atmo_output_loop (void *this_gen) {
     timersub(&tvnow, &tvlast, &tvdiff);
     if (tvdiff.tv_sec == 0 && tvdiff.tv_usec < output_rate)
       usleep(output_rate - tvdiff.tv_usec);
+  }
+
+    /* Turn off Light */
+  memset(this->output_colors, 0, colors_size);
+  if (memcmp(this->output_colors, this->last_output_colors, colors_size)) {
+    output_driver->output_colors(output_driver, this->output_colors, this->last_output_colors);
+    memset(this->last_output_colors, 0, colors_size);
   }
 
   ticket->release(ticket, 0);
@@ -1134,17 +1136,23 @@ static void start_threads(atmo_post_plugin_t *this) {
 }
 
 
-static void stop_threads(atmo_post_plugin_t *this) {
+static void stop_threads(atmo_post_plugin_t *this, int wait) {
+  int do_wait = 0;
+
   pthread_mutex_lock(&this->lock);
   if (this->grab_running) {
     *this->grab_running = 0;
     this->grab_running = NULL;
+    do_wait = wait;
   }
   if (this->output_running) {
     *this->output_running = 0;
     this->output_running = NULL;
+    do_wait = wait;
   }
   pthread_mutex_unlock(&this->lock);
+  if (do_wait)
+    usleep(THREAD_TERMINATION_WAIT_TIME*1000);
 }
 
 
@@ -1159,7 +1167,6 @@ static void close_output_driver(atmo_post_plugin_t *this) {
 
     this->output_driver->close(this->output_driver);
     this->driver_opened = 0;
-    this->runable = 0;
     llprintf(LOG_1, "output driver closed\n");
   }
 }
@@ -1167,7 +1174,6 @@ static void close_output_driver(atmo_post_plugin_t *this) {
 
 static void open_output_driver(atmo_post_plugin_t *this) {
 
-  this->runable = 0;
   if (!this->parm.enabled || this->driver != this->parm.driver || strcmp(this->driver_param, this->parm.driver_param))
     close_output_driver(this);
 
@@ -1250,7 +1256,6 @@ static void open_output_driver(atmo_post_plugin_t *this) {
         /* send first initial color packet */
       this->output_driver->output_colors(this->output_driver, this->output_colors, NULL);
 
-      this->runable = 1;
       start_threads(this);
     }
   }
@@ -1282,7 +1287,7 @@ static void atmo_video_close(xine_video_port_t *port_gen, xine_stream_t *stream)
   atmo_post_plugin_t *this = (atmo_post_plugin_t *) port->post;
 
   pthread_mutex_lock(&this->port_lock);
-  stop_threads(this);
+  stop_threads(this, 0);
   this->port = NULL;
   port->original_port->close(port->original_port, stream);
   port->stream = NULL;
@@ -1314,13 +1319,15 @@ static int atmo_set_parameters(xine_post_t *this_gen, void *parm_gen)
     llprintf(LOG_1, "set parameters\n");
 
     pthread_mutex_lock(&this->port_lock);
-    if (this->runable) {
+    if (this->port) {
       if (this->parm.enabled) {
         if (!enabled)
-          start_threads(this);
+          open_output_driver(this);
       } else {
-        if (enabled)
-          stop_threads(this);
+        if (enabled) {
+          stop_threads(this, 1);
+          close_output_driver(this);
+        }
       }
     }
     pthread_mutex_unlock(&this->port_lock);
@@ -1400,7 +1407,7 @@ static post_plugin_t *atmo_open_plugin(post_class_t *class_gen,
 
   port->new_port.open = atmo_video_open;
   port->new_port.close = atmo_video_close;
-  port->port_lock = &this->port_lock;
+  //port->port_lock = &this->port_lock;
 
   this->post_plugin.xine_post.video_input[0] = &port->new_port;
 
