@@ -446,13 +446,13 @@ static void calc_weight(atmo_post_plugin_t *this, int *weight, const int width, 
       if (center_channel)
         *weight++ = 255;
       if (top_left_channel)
-        *weight++ = (top + left) / 2;
+        *weight++ = (top > left) ? top: left;
       if (top_right_channel)
-        *weight++ = (top + right) / 2;
+        *weight++ = (top > right) ? top: right;
       if (bottom_left_channel)
-        *weight++ = (bottom + left) / 2;
+        *weight++ = (bottom > left) ? bottom: left;
       if (bottom_right_channel)
-        *weight++ = (bottom + right) / 2;
+        *weight++ = (bottom > right) ? bottom: right;
     }
   }
 }
