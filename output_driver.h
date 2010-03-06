@@ -22,13 +22,6 @@
 #include <termios.h>
 #include <regex.h>
 #include <fcntl.h>
-#include <math.h>
-
-#define NUM_AREAS       9       /* Number of different areas (top, bottom ...) */
-
-typedef struct { int sum, top, bottom, left, right, center, top_left, top_right, bottom_left, bottom_right; } num_channels_t;
-
-extern long int lround(double); /* Missing in math.h? */
 
 
 /*
@@ -37,13 +30,13 @@ extern long int lround(double); /* Missing in math.h? */
 typedef struct output_driver_s output_driver_t;
 struct output_driver_s {
     /* open device and configure for number of channels */
-  int (*open)(output_driver_t *this, const char *param, num_channels_t *channels);
+  int (*open)(output_driver_t *this, atmo_parameters_t *param);
 
     /* configure device for number of channels */
-  int (*configure)(output_driver_t *this, num_channels_t *channels);
+  int (*configure)(output_driver_t *this, atmo_parameters_t *param);
 
     /* close device */
-  void (*close)(output_driver_t *this);
+  int (*close)(output_driver_t *this);
 
     /*
      * send RGB color values to device
@@ -64,20 +57,20 @@ struct output_driver_s {
 
 typedef struct {
   output_driver_t output_driver;
-  num_channels_t num_channels;
+  atmo_parameters_t param;
   FILE *fd;
   int id;
 } file_output_driver_t;
 
 
-static int file_driver_open(output_driver_t *this_gen, const char *param, num_channels_t *n) {
+static int file_driver_open(output_driver_t *this_gen, atmo_parameters_t *p) {
   file_output_driver_t *this = (file_output_driver_t *) this_gen;
 
-  this->num_channels = *n;
+  this->param = *p;
   this->id = 0;
 
-  if (param && strlen(param))
-    this->fd = fopen(param, "a");
+  if (this->param.driver_param && strlen(this->param.driver_param))
+    this->fd = fopen(this->param.driver_param, "a");
   else
     this->fd = fopen("xine_atmo_data.out", "a");
 
@@ -88,19 +81,20 @@ static int file_driver_open(output_driver_t *this_gen, const char *param, num_ch
   return 0;
 }
 
-static int file_driver_configure(output_driver_t *this_gen, num_channels_t *n) {
+static int file_driver_configure(output_driver_t *this_gen, atmo_parameters_t *p) {
   file_output_driver_t *this = (file_output_driver_t *) this_gen;
-  this->num_channels = *n;
+  this->param = *p;
   return 0;
 }
 
-static void file_driver_close(output_driver_t *this_gen) {
+static int file_driver_close(output_driver_t *this_gen) {
   file_output_driver_t *this = (file_output_driver_t *) this_gen;
 
   if (this->fd) {
     fclose(this->fd);
     this->fd = NULL;
   }
+  return 0;
 }
 
 
@@ -114,35 +108,35 @@ static void file_driver_output_colors(output_driver_t *this_gen, rgb_color_t *co
     gettimeofday(&tvnow, NULL);
     fprintf(fd, "%d: %ld.%03ld ---\n", this->id++, tvnow.tv_sec, tvnow.tv_usec / 1000);
 
-    for (c = 1; c <= this->num_channels.top; ++c, ++colors)
+    for (c = 1; c <= this->param.top; ++c, ++colors)
       fprintf(fd,"      top %2d: %3d %3d %3d\n", c, colors->r, colors->g, colors->b);
 
-    for (c = 1; c <= this->num_channels.bottom; ++c, ++colors)
+    for (c = 1; c <= this->param.bottom; ++c, ++colors)
       fprintf(fd,"   bottom %2d: %3d %3d %3d\n", c, colors->r, colors->g, colors->b);
 
-    for (c = 1; c <= this->num_channels.left; ++c, ++colors)
+    for (c = 1; c <= this->param.left; ++c, ++colors)
       fprintf(fd,"     left %2d: %3d %3d %3d\n", c, colors->r, colors->g, colors->b);
 
-    for (c = 1; c <= this->num_channels.right; ++c, ++colors)
+    for (c = 1; c <= this->param.right; ++c, ++colors)
       fprintf(fd,"    right %2d: %3d %3d %3d\n", c, colors->r, colors->g, colors->b);
 
-    if (this->num_channels.center) {
+    if (this->param.center) {
       fprintf(fd,"      center: %3d %3d %3d\n", colors->r, colors->g, colors->b);
       ++colors;
     }
-    if (this->num_channels.top_left) {
+    if (this->param.top_left) {
       fprintf(fd,"    top left: %3d %3d %3d\n", colors->r, colors->g, colors->b);
       ++colors;
     }
-    if (this->num_channels.top_right) {
+    if (this->param.top_right) {
       fprintf(fd,"    top right: %3d %3d %3d\n", colors->r, colors->g, colors->b);
       ++colors;
     }
-    if (this->num_channels.bottom_left) {
+    if (this->param.bottom_left) {
       fprintf(fd,"  bottom left: %3d %3d %3d\n", colors->r, colors->g, colors->b);
       ++colors;
     }
-    if (this->num_channels.bottom_right) {
+    if (this->param.bottom_right) {
       fprintf(fd," bottom right: %3d %3d %3d\n", colors->r, colors->g, colors->b);
     }
     fflush(fd);
@@ -157,33 +151,33 @@ static void file_driver_output_colors(output_driver_t *this_gen, rgb_color_t *co
 
 typedef struct {
   output_driver_t output_driver;
-  num_channels_t num_channels;
+  atmo_parameters_t param;
   int devfd;
 } serial_output_driver_t;
 
 
-static int serial_driver_open(output_driver_t *this_gen, const char *param, num_channels_t *n) {
+static int serial_driver_open(output_driver_t *this_gen, atmo_parameters_t *p) {
   serial_output_driver_t *this = (serial_output_driver_t *) this_gen;
   char buf[256], buf1[64], *s;
   const char *devname = NULL;
   regex_t preg;
   int rc;
 
-  this->num_channels = *n;
+  this->param = *p;
   this->devfd = -1;
 
-  if (!param || !strlen(param))
+  if (!this->param.driver_param || !strlen(this->param.driver_param))
   {
     strcpy(this->output_driver.errmsg, "no device parameter");
     return -1;
   }
 
-  if (strncmp(param, "usb:", 4) == 0) {
+  if (strncmp(this->param.driver_param, "usb:", 4) == 0) {
       /* Lookup serial USB device name */
-    rc = regcomp(&preg, param + 4, REG_EXTENDED | REG_NOSUB);
+    rc = regcomp(&preg, this->param.driver_param + 4, REG_EXTENDED | REG_NOSUB);
     if (rc) {
       regerror(rc, &preg, buf, sizeof(buf));
-      snprintf(this->output_driver.errmsg, sizeof(this->output_driver.errmsg), "illegal device identification pattern '%s': %s", param + 4, buf);
+      snprintf(this->output_driver.errmsg, sizeof(this->output_driver.errmsg), "illegal device identification pattern '%s': %s", this->param.driver_param + 4, buf);
       regfree(&preg);
       return -1;
     }
@@ -210,9 +204,9 @@ static int serial_driver_open(output_driver_t *this_gen, const char *param, num_
       strcpy(this->output_driver.errmsg, "could not find usb device in /proc/tty/driver/usbserial");
       return -1;
     }
-    llprintf(LOG_1, "USB tty device for '%s' is '%s'\n", param + 4, devname);
+    llprintf(LOG_1, "USB tty device for '%s' is '%s'\n", this->param.driver_param + 4, devname);
   } else {
-    devname = param;
+    devname = this->param.driver_param;
   }
 
     /* open serial port */
@@ -245,21 +239,21 @@ static int serial_driver_open(output_driver_t *this_gen, const char *param, num_
 }
 
 
-static int serial_driver_configure(output_driver_t *this_gen, num_channels_t *n) {
+static int serial_driver_configure(output_driver_t *this_gen, atmo_parameters_t *p) {
   serial_output_driver_t *this = (serial_output_driver_t *) this_gen;
-  this->num_channels = *n;
+  this->param = *p;
   return 0;
 }
 
 
-static void serial_driver_close(output_driver_t *this_gen) {
+static int serial_driver_close(output_driver_t *this_gen) {
   serial_output_driver_t *this = (serial_output_driver_t *) this_gen;
 
-  if (this->devfd < 0)
-    return;
-
-  close(this->devfd);
-  this->devfd = -1;
+  if (this->devfd >= 0) {
+    close(this->devfd);
+    this->devfd = -1;
+  }
+  return 0;
 }
 
 
@@ -282,43 +276,43 @@ static void classic_driver_output_colors(output_driver_t *this_gen, rgb_color_t 
   msg[3] = 15;         /* number of channels (5 * RGB) */
 
     /* top channel */
-  if (this->num_channels.top)
+  if (this->param.top)
   {
     msg[13] = colors->r;
     msg[14] = colors->g;
     msg[15] = colors->b;
-    colors += this->num_channels.top;
+    colors += this->param.top;
   }
 
     /* bottom channel */
-  if (this->num_channels.bottom)
+  if (this->param.bottom)
   {
     msg[16] = colors->r;
     msg[17] = colors->g;
     msg[18] = colors->b;
-    colors += this->num_channels.bottom;
+    colors += this->param.bottom;
   }
 
     /* left channel */
-  if (this->num_channels.left)
+  if (this->param.left)
   {
     msg[7] = colors->r;
     msg[8] = colors->g;
     msg[9] = colors->b;
-    colors += this->num_channels.left;
+    colors += this->param.left;
   }
 
     /* right channel */
-  if (this->num_channels.right)
+  if (this->param.right)
   {
     msg[10] = colors->r;
     msg[11] = colors->g;
     msg[12] = colors->b;
-    colors += this->num_channels.right;
+    colors += this->param.right;
   }
 
     /* center channel */
-  if (this->num_channels.center)
+  if (this->param.center)
   {
     msg[4] = colors->r;
     msg[5] = colors->g;
@@ -350,34 +344,34 @@ static void df4ch_driver_output_colors(output_driver_t *this_gen, rgb_color_t *c
   msg[2] = 12;   /* number of channels (4 * RGB) */
 
     /* top channel */
-  if (this->num_channels.top)
+  if (this->param.top)
   {
     msg[9] = colors->r;
     msg[10] = colors->g;
     msg[11] = colors->b;
-    colors += this->num_channels.top;
+    colors += this->param.top;
   }
 
     /* bottom channel */
-  if (this->num_channels.bottom)
+  if (this->param.bottom)
   {
     msg[12] = colors->r;
     msg[13] = colors->g;
     msg[14] = colors->b;
-    colors += this->num_channels.bottom;
+    colors += this->param.bottom;
   }
 
     /* left channel */
-  if (this->num_channels.left)
+  if (this->param.left)
   {
     msg[3] = colors->r;
     msg[4] = colors->g;
     msg[5] = colors->b;
-    colors += this->num_channels.left;
+    colors += this->param.left;
   }
 
     /* right channel */
-  if (this->num_channels.right)
+  if (this->param.right)
   {
     msg[6] = colors->r;
     msg[7] = colors->g;
@@ -406,7 +400,7 @@ static void df4ch_driver_output_colors(output_driver_t *this_gen, rgb_color_t *c
 #define DF10CH_USB_DEFAULT_TIMEOUT   100
 
 #define DF10CH_MAX_CHANNELS     30
-#define DF10CH_SIZE_CONFIG      (14 + DF10CH_MAX_CHANNELS * 6)
+#define DF10CH_SIZE_CONFIG      (17 + DF10CH_MAX_CHANNELS * 6)
 #define DF10CH_CONFIG_VALID_ID  0xA0A1
 
 enum { DF10CH_AREA_TOP, DF10CH_AREA_BOTTOM, DF10CH_AREA_LEFT, DF10CH_AREA_RIGHT, DF10CH_AREA_CENTER, DF10CH_AREA_TOP_LEFT, DF10CH_AREA_TOP_RIGHT, DF10CH_AREA_BOTTOM_LEFT, DF10CH_AREA_BOTTOM_RIGHT };
@@ -426,29 +420,35 @@ typedef struct {
   df10ch_gamma_tab_t *gamma_tab;  // Corresponding gamma table
 } df10ch_channel_config_t;
 
+typedef struct df10ch_output_driver_s df10ch_output_driver_t;
+
 typedef struct df10ch_ctrl_s {
   struct df10ch_ctrl_s *next;
+  df10ch_output_driver_t *driver;
   libusb_device_handle *dev;
-  int idx_serial_number;
+  int idx_serial_number;        // USB string index of serial number
   uint16_t config_version;      // Version number of configuration data
   uint16_t pwm_res;             // PWM resolution
   int num_req_channels;         // Number of channels in request
   df10ch_channel_config_t *channel_config;      // List of channel configurations
   char id[32];                  // ID of Controller
-  struct libusb_transfer *transfer;
-  uint8_t *transfer_data;
-  int pending_submit;
+  struct libusb_transfer *transfer; // Prepared set brightness request for asynchrony submitting
+  uint8_t *transfer_data;       // Data of set brightness request
+  int pending_submit;           // Is true if a asynchrony transfer is pending
+  int transfer_error;
 } df10ch_ctrl_t;
 
-typedef struct {
+struct df10ch_output_driver_s {
   output_driver_t output_driver;
   libusb_context *ctx;
-  num_channels_t num_channels;          // Global channel layout
-  df10ch_ctrl_t *ctrls;                 // List of found controllers
-  df10ch_gamma_tab_t *gamma_tabs;       // List of calculated gamma tables
+  atmo_parameters_t param;          // Global channel layout
+  df10ch_ctrl_t *ctrls;             // List of found controllers
+  df10ch_gamma_tab_t *gamma_tabs;   // List of calculated gamma tables
+  uint16_t config_version;          // (Maximum) Version number of configuration data
   int max_transmit_latency;
   int avg_transmit_latency;
-} df10ch_output_driver_t;
+  int transfer_err_cnt;             // Number of transfer errors
+};
 
 
 static const char *df10ch_usb_errmsg(int rc) {
@@ -507,6 +507,30 @@ static const char * df10ch_usb_transfer_errmsg(int s) {
 }
 
 
+static void df10ch_comm_errmsg(int stat, char *rc) {
+  if (stat == 0)
+    strcpy(rc, "OK");
+  else
+    *rc = 0;
+  if (stat & (1<<COMM_ERR_OVERRUN))
+      strcat(rc, " OVERRUN");
+  if (stat & (1<<COMM_ERR_FRAME))
+      strcat(rc, " FRAME");
+  if (stat & (1<<COMM_ERR_TIMEOUT))
+      strcat(rc, " TIMEOUT");
+  if (stat & (1<<COMM_ERR_START))
+      strcat(rc, " START");
+  if (stat & (1<<COMM_ERR_OVERFLOW))
+      strcat(rc, " OVERFLOW");
+  if (stat & (1<<COMM_ERR_CRC))
+      strcat(rc, " CRC");
+  if (stat & (1<<COMM_ERR_DUPLICATE))
+      strcat(rc, " DUPLICATE");
+  if (stat & (1<<COMM_ERR_DEBUG))
+      strcat(rc, " DEBUG");
+}
+
+
 static int df10ch_control_in_transfer(df10ch_ctrl_t *ctrl, uint8_t req, uint16_t val, uint16_t index, unsigned int timeout, uint8_t *buf, uint16_t buflen)
 {
       // Use a return buffer always so that the controller is able to send a USB reply status
@@ -526,9 +550,12 @@ static int df10ch_control_in_transfer(df10ch_ctrl_t *ctrl, uint8_t req, uint16_t
         n = libusb_control_transfer(ctrl->dev, LIBUSB_ENDPOINT_IN | LIBUSB_REQUEST_TYPE_VENDOR | LIBUSB_RECIPIENT_DEVICE, req, val, index, buf, len, timeout);
         if (n != LIBUSB_ERROR_INTERRUPTED)
         {
+            if (n < 0)
+              ++ctrl->driver->transfer_err_cnt;
             if (n >= 0 || n != LIBUSB_ERROR_PIPE)
                 break;
             ++retrys;
+            llprintf(LOG_1, "%s: sending USB control transfer message %d failed (pipe error): retry %d\n", ctrl->id, req, retrys);
         }
     }
 
@@ -595,19 +622,45 @@ static void df10ch_wait_for_replys(df10ch_output_driver_t *this) {
     else
       ctrl = ctrl->next;
   }
+
+  ctrl = this->ctrls;
+  while (ctrl) {
+    if (ctrl->transfer_error) {
+      char reply_errmsg[128], request_errmsg[128];
+      uint8_t data[1];
+      if (df10ch_control_in_transfer(ctrl, REQ_GET_REPLY_ERR_STATUS, 0, 0, DF10CH_USB_DEFAULT_TIMEOUT, data, 1))
+        strcpy(reply_errmsg, "N/A");
+      else
+        df10ch_comm_errmsg(data[0], reply_errmsg);
+      if (df10ch_control_in_transfer(ctrl, PWM_REQ_GET_REQUEST_ERR_STATUS, 0, 0, DF10CH_USB_DEFAULT_TIMEOUT, data, 1))
+        strcpy(request_errmsg, "N/A");
+      else
+        df10ch_comm_errmsg(data[0], request_errmsg);
+      llprintf(LOG_1, "%s: comm error USB: %s, PWM: %s\n", ctrl->id, reply_errmsg, request_errmsg);
+    }
+    ctrl = ctrl->next;
+  }
 }
 
 
 static void df10ch_reply_cb(struct libusb_transfer *transfer) {
   df10ch_ctrl_t *ctrl = (df10ch_ctrl_t *) transfer->user_data;
   ctrl->pending_submit = 0;
-  if (transfer->status != LIBUSB_TRANSFER_COMPLETED && transfer->status != LIBUSB_TRANSFER_CANCELLED)
+  if (transfer->status != LIBUSB_TRANSFER_COMPLETED && transfer->status != LIBUSB_TRANSFER_CANCELLED) {
+    ++ctrl->driver->transfer_err_cnt;
+    ctrl->transfer_error = 1;
     llprintf(LOG_1, "%s: submitting USB control transfer message failed: %s\n", ctrl->id, df10ch_usb_transfer_errmsg(transfer->status));
+  }
 }
 
 
-static int df10ch_driver_open(output_driver_t *this_gen, const char *param, num_channels_t *num_channels) {
+static int df10ch_driver_open(output_driver_t *this_gen, atmo_parameters_t *param) {
   df10ch_output_driver_t *this = (df10ch_output_driver_t *) this_gen;
+
+  this->config_version = 0;
+  this->max_transmit_latency = 0;
+  this->avg_transmit_latency = 0;
+  this->transfer_err_cnt = 0;
 
   if (libusb_init(&this->ctx) < 0) {
     strcpy(this->output_driver.errmsg, "can't initialize USB library");
@@ -664,6 +717,7 @@ static int df10ch_driver_open(output_driver_t *this_gen, const char *param, num_
                 df10ch_ctrl_t *ctrl = (df10ch_ctrl_t *) calloc(1, sizeof(df10ch_ctrl_t));
                 ctrl->next = this->ctrls;
                 this->ctrls = ctrl;
+                ctrl->driver = this;
                 ctrl->dev = hdl;
                 ctrl->idx_serial_number = desc.iSerialNumber;
                 strcpy(ctrl->id, id);
@@ -687,7 +741,15 @@ static int df10ch_driver_open(output_driver_t *this_gen, const char *param, num_
   }
 
     // Ignore channel configuration defined by plugin parameters
-  memset(num_channels, 0, sizeof(num_channels_t));
+  param->top = 0;
+  param->bottom = 0;
+  param->left = 0;
+  param->right = 0;
+  param->center = 0;
+  param->top_left = 0;
+  param->top_right = 0;
+  param->bottom_left = 0;
+  param->bottom_right = 0;
 
     // Read controller configuration
   df10ch_ctrl_t *ctrl = this->ctrls;
@@ -737,42 +799,51 @@ static int df10ch_driver_open(output_driver_t *this_gen, const char *param, num_
     }
 
     ctrl->config_version = eedata[2] + (eedata[3] << 8);
+    if (ctrl->config_version > this->config_version)
+      this->config_version = ctrl->config_version;
 
       // Determine channel layout
     int n;
     n = eedata[4 + DF10CH_AREA_TOP];
-    if (n > num_channels->top)
-      num_channels->top = n;
+    if (n > param->top)
+      param->top = n;
     n = eedata[4 + DF10CH_AREA_BOTTOM];
-    if (n > num_channels->bottom)
-      num_channels->bottom = n;
+    if (n > param->bottom)
+      param->bottom = n;
     n = eedata[4 + DF10CH_AREA_LEFT];
-    if (n > num_channels->left)
-      num_channels->left = n;
+    if (n > param->left)
+      param->left = n;
     n = eedata[4 + DF10CH_AREA_RIGHT];
-    if (n > num_channels->right)
-      num_channels->right = n;
+    if (n > param->right)
+      param->right = n;
     n = eedata[4 + DF10CH_AREA_CENTER];
-    if (n > num_channels->center)
-      num_channels->center = n;
+    if (n > param->center)
+      param->center = n;
     n = eedata[4 + DF10CH_AREA_TOP_LEFT];
-    if (n > num_channels->top_left)
-      num_channels->top_left = n;
+    if (n > param->top_left)
+      param->top_left = n;
     n = eedata[4 + DF10CH_AREA_TOP_RIGHT];
-    if (n > num_channels->top_right)
-      num_channels->top_right = n;
+    if (n > param->top_right)
+      param->top_right = n;
     n = eedata[4 + DF10CH_AREA_BOTTOM_LEFT];
-    if (n > num_channels->bottom_left)
-      num_channels->bottom_left = n;
+    if (n > param->bottom_left)
+      param->bottom_left = n;
     n = eedata[4 + DF10CH_AREA_BOTTOM_RIGHT];
-    if (n > num_channels->bottom_right)
-      num_channels->bottom_right = n;
+    if (n > param->bottom_right)
+      param->bottom_right = n;
 
     ctrl->num_req_channels = eedata[13];
     if (ctrl->num_req_channels > DF10CH_MAX_CHANNELS)
       ctrl->num_req_channels = DF10CH_MAX_CHANNELS;
 
-       // Read PWM resolution
+    if (ctrl->config_version > 1) {
+      int eei = 14 + ctrl->num_req_channels * 6;
+      param->overscan = eedata[eei];
+      param->analyze_size = eedata[eei + 1];
+      param->edge_weighting = eedata[eei + 2];
+    }
+
+      // Read PWM resolution
     if (df10ch_control_in_transfer(ctrl, PWM_REQ_GET_MAX_PWM, 0, 0, DF10CH_USB_DEFAULT_TIMEOUT, data, 2)) {
       snprintf(this->output_driver.errmsg, sizeof(this->output_driver.errmsg), "%s: reading PWM resolution data fails!", ctrl->id);
       df10ch_dispose(this);
@@ -806,11 +877,11 @@ static int df10ch_driver_open(output_driver_t *this_gen, const char *param, num_
         this->gamma_tabs = gt;
         gt->gamma = gamma;
         gt->white_cal = white_cal;
-        double dgamma = gamma / 10.0;
-        double dwhite_cal = white_cal;
+        const double dgamma = gamma / 10.0;
+        const double dwhite_cal = white_cal;
         int v;
         for (v = 0; v < 256; ++v) {
-          gt->tab[v] = (uint16_t) (lround(pow((v / 255.0), dgamma) * dwhite_cal));
+          gt->tab[v] = (uint16_t) (lround(pow(((double)v / 255.0), dgamma) * dwhite_cal));
           if (gt->tab[v] > ctrl->pwm_res)
             gt->tab[v] = ctrl->pwm_res;
         }
@@ -832,36 +903,38 @@ static int df10ch_driver_open(output_driver_t *this_gen, const char *param, num_
     ctrl = ctrl->next;
   }
 
-  this->num_channels = *num_channels;
-  this->max_transmit_latency = 0;
-  this->avg_transmit_latency = 0;
+  this->param = *param;
   return 0;
 }
 
 
-static int df10ch_driver_configure(output_driver_t *this_gen, num_channels_t *num_channels) {
+static int df10ch_driver_configure(output_driver_t *this_gen, atmo_parameters_t *param) {
   df10ch_output_driver_t *this = (df10ch_output_driver_t *) this_gen;
 
     // Ignore channel configuration defined by plugin parameters
-  num_channels->top = this->num_channels.top;
-  num_channels->bottom = this->num_channels.bottom;
-  num_channels->left = this->num_channels.left;
-  num_channels->right = this->num_channels.right;
-  num_channels->center = this->num_channels.center;
-  num_channels->top_left = this->num_channels.top_left;
-  num_channels->top_right = this->num_channels.top_right;
-  num_channels->bottom_left = this->num_channels.bottom_left;
-  num_channels->bottom_right = this->num_channels.bottom_right;
+  param->top = this->param.top;
+  param->bottom = this->param.bottom;
+  param->left = this->param.left;
+  param->right = this->param.right;
+  param->center = this->param.center;
+  param->top_left = this->param.top_left;
+  param->top_right = this->param.top_right;
+  param->bottom_left = this->param.bottom_left;
+  param->bottom_right = this->param.bottom_right;
 
-  this->num_channels = *num_channels;
+  if (this->config_version > 1) {
+    param->overscan = this->param.overscan;
+    param->analyze_size = this->param.analyze_size;
+    param->edge_weighting = this->param.edge_weighting;
+  }
+
+  this->param = *param;
   return 0;
 }
 
 
-static void df10ch_driver_close(output_driver_t *this_gen) {
+static int df10ch_driver_close(output_driver_t *this_gen) {
   df10ch_output_driver_t *this = (df10ch_output_driver_t *) this_gen;
-
-  llprintf(LOG_1, "average transmit latency: %d [us]\n", this->avg_transmit_latency);
 
     // Cancel all pending requests
   df10ch_ctrl_t *ctrl = this->ctrls;
@@ -873,6 +946,14 @@ static void df10ch_driver_close(output_driver_t *this_gen) {
 
   df10ch_wait_for_replys(this);
   df10ch_dispose(this);
+
+  llprintf(LOG_1, "average transmit latency: %d [us]\n", this->avg_transmit_latency);
+
+  if (this->transfer_err_cnt) {
+    snprintf(this->output_driver.errmsg, sizeof(this->output_driver.errmsg), "%d transfer errors happen", this->transfer_err_cnt);
+    return -1;
+  }
+  return 0;
 }
 
 
@@ -884,21 +965,21 @@ static void df10ch_driver_output_colors(output_driver_t *this_gen, rgb_color_t *
   rgb_color_t *area_map[9];
   rgb_color_t *c = colors;
   area_map[DF10CH_AREA_TOP] = c;
-  c += this->num_channels.top;
+  c += this->param.top;
   area_map[DF10CH_AREA_BOTTOM] = c;
-  c += this->num_channels.bottom;
+  c += this->param.bottom;
   area_map[DF10CH_AREA_LEFT] = c;
-  c += this->num_channels.left;
+  c += this->param.left;
   area_map[DF10CH_AREA_RIGHT] = c;
-  c += this->num_channels.right;
+  c += this->param.right;
   area_map[DF10CH_AREA_CENTER] = c;
-  c += this->num_channels.center;
+  c += this->param.center;
   area_map[DF10CH_AREA_TOP_LEFT] = c;
-  c += this->num_channels.top_left;
+  c += this->param.top_left;
   area_map[DF10CH_AREA_TOP_RIGHT] = c;
-  c += this->num_channels.top_right;
+  c += this->param.top_right;
   area_map[DF10CH_AREA_BOTTOM_LEFT] = c;
-  c += this->num_channels.bottom_left;
+  c += this->param.bottom_left;
   area_map[DF10CH_AREA_BOTTOM_RIGHT] = c;
 
   if (LOG_1)
@@ -944,6 +1025,7 @@ static void df10ch_driver_output_colors(output_driver_t *this_gen, rgb_color_t *
 
       // initiate asynchron data transfer to controller
     if (do_submit) {
+      ctrl->transfer_error = 0;
       int rc = libusb_submit_transfer(ctrl->transfer);
       if (rc)
         llprintf(LOG_1, "%s: submitting USB control transfer message failed: %s\n", ctrl->id, df10ch_usb_errmsg(rc));

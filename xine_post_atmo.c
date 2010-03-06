@@ -36,6 +36,8 @@
 
 #include <xine/post.h>
 
+extern long int lround(double); /* Missing in math.h? */
+
 #undef LOG_MODULE
 #define LOG_MODULE      "atmo"
 #define LOG_1           1
@@ -46,6 +48,7 @@
 #define GRAB_TIMEOUT                   100     /* max. time waiting for next grab image [ms] */
 #define THREAD_TERMINATION_WAIT_TIME   150     /* time waiting for thread termination [ms] */
 
+#define NUM_AREAS                       9      /* Number of different areas (top, bottom ...) */
 
 /* accuracy of color calculation */
 #define h_MAX   255
@@ -61,8 +64,6 @@
 typedef struct { uint8_t h, s, v; } hsv_color_t;
 typedef struct { uint8_t r, g, b; } rgb_color_t;
 typedef struct { uint64_t r, g, b; } rgb_color_sum_t;
-
-#include "output_driver.h"
 
 /*
  * Plugin
@@ -88,6 +89,7 @@ typedef struct {
   int edge_weighting;
   int hue_win_size;
   int sat_win_size;
+  int hue_threshold;
   int brightness;
   int filter;
   int filter_smoothness;
@@ -99,6 +101,9 @@ typedef struct {
   int gamma;
   int start_delay;
 } atmo_parameters_t;
+
+
+#include "output_driver.h"
 
 
 #define NUM_FILTERS     2
@@ -138,12 +143,14 @@ PARAM_ITEM(POST_PARAM_TYPE_INT, overscan, NULL, 0, 200, 0,
   "ignored overscan border of grabbed image [%1000]")
 PARAM_ITEM(POST_PARAM_TYPE_INT, darkness_limit, NULL, 0, 100, 0,
   "limit for black pixel")
-PARAM_ITEM(POST_PARAM_TYPE_INT, edge_weighting, NULL, 1, 30, 0,
+PARAM_ITEM(POST_PARAM_TYPE_INT, edge_weighting, NULL, 10, 200, 0,
   "power of edge weighting")
 PARAM_ITEM(POST_PARAM_TYPE_INT, hue_win_size, NULL, 0, 5, 0,
   "hue windowing size")
 PARAM_ITEM(POST_PARAM_TYPE_INT, sat_win_size, NULL, 0, 5, 0,
   "saturation windowing size")
+PARAM_ITEM(POST_PARAM_TYPE_INT, hue_threshold, NULL, 0, 100, 0,
+  "hue threshold [%]")
 PARAM_ITEM(POST_PARAM_TYPE_INT, brightness, NULL, 50, 300, 0,
   "brightness [%]")
 PARAM_ITEM(POST_PARAM_TYPE_INT, filter, filter_enum, 0, NUM_FILTERS, 0,
@@ -184,7 +191,8 @@ typedef struct atmo_post_plugin_s
   pthread_mutex_t port_lock;
 
     /* channel configuration related */
-  num_channels_t num_channels;
+  atmo_parameters_t active_parm;
+  int sum_channels;
 
   /* thread related */
   int *grab_running, *output_running;
@@ -196,14 +204,13 @@ typedef struct atmo_post_plugin_s
   output_driver_t *output_driver;
   output_drivers_t output_drivers;
   int driver_opened;
-  int driver;
-  char driver_param[256];
   rgb_color_t *output_colors, *last_output_colors;
 
     /* analyze related */
   uint64_t *hue_hist, *sat_hist;
   uint64_t *w_hue_hist, *w_sat_hist;
-  int *most_used_hue, *last_most_used_hue, *most_used_sat;
+  uint64_t *avg_bright;
+  int *most_used_hue, *last_most_used_hue, *most_used_sat, *avg_cnt;
   rgb_color_t *analyzed_colors;
 
     /* filter related */
@@ -399,82 +406,89 @@ static void calc_hsv_image(hsv_color_t *hsv, uint8_t *rgb, int img_size) {
 }
 
 
-static void calc_weight(atmo_post_plugin_t *this, int *weight, const int width, const int height, const double edge_weighting) {
+static void calc_weight(atmo_post_plugin_t *this, uint8_t *weight, const int width, const int height, const int edge_weighting) {
   int row, col, c;
 
-  const int top_channels = this->num_channels.top;
-  const int bottom_channels = this->num_channels.bottom;
-  const int left_channels = this->num_channels.left;
-  const int right_channels = this->num_channels.right;
-  const int center_channel = this->num_channels.center;
-  const int top_left_channel = this->num_channels.top_left;
-  const int top_right_channel = this->num_channels.top_right;
-  const int bottom_left_channel = this->num_channels.bottom_left;
-  const int bottom_right_channel = this->num_channels.bottom_right;
+  const double w = edge_weighting > 10 ? (double)edge_weighting / 10.0: 10.0;
 
-  c = top_channels + top_left_channel + top_right_channel;
-  const int top_chunk = c ? width / c: 0;
+  const int top_channels = this->active_parm.top;
+  const int bottom_channels = this->active_parm.bottom;
+  const int left_channels = this->active_parm.left;
+  const int right_channels = this->active_parm.right;
+  const int center_channel = this->active_parm.center;
+  const int top_left_channel = this->active_parm.top_left;
+  const int top_right_channel = this->active_parm.top_right;
+  const int bottom_left_channel = this->active_parm.bottom_left;
+  const int bottom_right_channel = this->active_parm.bottom_right;
 
-  c = bottom_channels + bottom_left_channel + bottom_right_channel;
-  const int bottom_chunk = c ? width / c: 0;
+  const int sum_top_channels = top_channels + top_left_channel + top_right_channel;
+  const int sum_bottom_channels = bottom_channels + bottom_left_channel + bottom_right_channel;
+  const int sum_left_channels = left_channels + bottom_left_channel + top_left_channel;
+  const int sum_right_channels = right_channels + bottom_right_channel + top_right_channel;
 
-  c = left_channels + bottom_left_channel + top_left_channel;
-  const int left_chunk = c ? height / c: 0;
+  const int center_y = height / 2;
+  const int center_x = width / 2;
 
-  c = right_channels + bottom_right_channel + top_right_channel;
-  const int right_chunk = c ? height / c: 0;
+  const double fheight = height - 1;
+  const double fwidth = width - 1;
 
   for (row = 0; row < height; ++row)
   {
-    double row_norm = (double)row / (double)(height - 1);
-    int top = (int) (255.0 * pow(1.0 - row_norm, edge_weighting));
-    int bottom = (int) (255.0 * pow(row_norm, edge_weighting));
+    double row_norm = (double)row / fheight;
+    int top = (int)(255.0 * pow(1.0 - row_norm, w));
+    int bottom = (int)(255.0 * pow(row_norm, w));
 
     for (col = 0; col < width; ++col)
     {
-      double col_norm = (double)col / (double)(width - 1);
-      int left = (int) (255.0 * pow((1.0 - col_norm), edge_weighting));
-      int right = (int) (255.0 * pow(col_norm, edge_weighting));
+      double col_norm = (double)col / fwidth;
+      int left = (int)(255.0 * pow((1.0 - col_norm), w));
+      int right = (int)(255.0 * pow(col_norm, w));
 
       for (c = top_left_channel; c < (top_channels + top_left_channel); ++c)
-        *weight++ = (col >= (c * top_chunk) && col < ((c + 1) * top_chunk)) ? top: 0;
+        *weight++ = (col >= ((width * c) / sum_top_channels) && col < ((width * (c + 1)) / sum_top_channels) && row < center_y) ? top: 0;
+
       for (c = bottom_left_channel; c < (bottom_channels + bottom_left_channel); ++c)
-        *weight++ = (col >= (c * bottom_chunk) && col < ((c + 1) * bottom_chunk)) ? bottom: 0;
+        *weight++ = (col >= ((width * c) / sum_bottom_channels) && col < ((width * (c + 1)) / sum_bottom_channels) && row >= center_y) ? bottom: 0;
+
       for (c = top_left_channel; c < (left_channels + top_left_channel); ++c)
-        *weight++ = (row >= (c * left_chunk) && row < ((c + 1) * left_chunk)) ? left: 0;
+        *weight++ = (row >= ((height * c) / sum_left_channels) && row < ((height * (c + 1)) / sum_left_channels) && col < center_x) ? left: 0;
+
       for (c = top_right_channel; c < (right_channels + top_right_channel); ++c)
-        *weight++ = (row >= (c * right_chunk) && row < ((c + 1) * right_chunk)) ? right: 0;
+        *weight++ = (row >= ((height * c) / sum_right_channels) && row < ((height * (c + 1)) / sum_right_channels) && col >= center_x) ? right: 0;
+
       if (center_channel)
         *weight++ = 255;
+
       if (top_left_channel)
-        *weight++ = (top > left) ? top: left;
+        *weight++ = (col < center_x && row < center_y) ? ((top > left) ? top: left) : 0;
+
       if (top_right_channel)
-        *weight++ = (top > right) ? top: right;
+        *weight++ = (col >= center_x && row < center_y) ? ((top > right) ? top: right): 0;
+
       if (bottom_left_channel)
-        *weight++ = (bottom > left) ? bottom: left;
+        *weight++ = (col < center_x && row >= center_y) ? ((bottom > left) ? bottom: left): 0;
+
       if (bottom_right_channel)
-        *weight++ = (bottom > right) ? bottom: right;
+        *weight++ = (col >= center_x && row >= center_y) ? ((bottom > right) ? bottom: right): 0;
     }
   }
 }
 
 
-static void calc_hue_hist(atmo_post_plugin_t *this, hsv_color_t *hsv, int *weight, int img_size) {
-  const int n = this->num_channels.sum;
+static void calc_hue_hist(atmo_post_plugin_t *this, hsv_color_t *hsv, uint8_t *weight, int img_size) {
+  const int n = this->sum_channels;
   uint64_t * const hue_hist = this->hue_hist;
-  const int darkness_limit = this->parm.darkness_limit;
+  const int darkness_limit = this->active_parm.darkness_limit;
 
   memset(hue_hist, 0, (n * (h_MAX+1) * sizeof(uint64_t)));
 
   while (img_size--) {
-    if (hsv->v > darkness_limit) {
+    if (hsv->v >= darkness_limit) {
       int c;
-      for (c = 0; c < n; ++c) {
-        hue_hist[c * (h_MAX+1) + hsv->h] += *weight * hsv->v;
-        ++weight;
-      }
-    } else
-      weight += n;
+      for (c = 0; c < n; ++c)
+        hue_hist[c * (h_MAX+1) + hsv->h] += weight[c] * hsv->v;
+    }
+    weight += n;
     ++hsv;
   }
 }
@@ -482,10 +496,10 @@ static void calc_hue_hist(atmo_post_plugin_t *this, hsv_color_t *hsv, int *weigh
 
 static void calc_windowed_hue_hist(atmo_post_plugin_t *this) {
   int i, c, w;
-  const int n = this->num_channels.sum;
+  const int n = this->sum_channels;
   uint64_t * const hue_hist = this->hue_hist;
   uint64_t * const w_hue_hist = this->w_hue_hist;
-  const int hue_win_size = this->parm.hue_win_size;
+  const int hue_win_size = this->active_parm.hue_win_size;
 
   memset(w_hue_hist, 0, (n * (h_MAX+1) * sizeof(uint64_t)));
 
@@ -512,10 +526,11 @@ static void calc_windowed_hue_hist(atmo_post_plugin_t *this) {
 static void calc_most_used_hue(atmo_post_plugin_t *this) {
   int i, c;
 
-  const int n = this->num_channels.sum;
+  const int n = this->sum_channels;
   uint64_t * const w_hue_hist = this->w_hue_hist;
   int * const most_used_hue = this->most_used_hue;
   int * const last_most_used_hue = this->last_most_used_hue;
+  const double hue_threshold = (double)this->active_parm.hue_threshold / 100.0;
 
   memset(most_used_hue, 0, (n * sizeof(int)));
 
@@ -527,7 +542,7 @@ static void calc_most_used_hue(atmo_post_plugin_t *this) {
         most_used_hue[c] = i;
       }
     }
-    if (((double) w_hue_hist[c * (h_MAX+1) + last_most_used_hue[c]] / (double) v) > 0.93)
+    if (((double) w_hue_hist[c * (h_MAX+1) + last_most_used_hue[c]] / (double) v) > hue_threshold)
       most_used_hue[c] = last_most_used_hue[c];
     else
       last_most_used_hue[c] = most_used_hue[c];
@@ -535,26 +550,25 @@ static void calc_most_used_hue(atmo_post_plugin_t *this) {
 }
 
 
-static void calc_sat_hist(atmo_post_plugin_t *this, hsv_color_t *hsv, int *weight, int img_size) {
-  const int n = this->num_channels.sum;
+static void calc_sat_hist(atmo_post_plugin_t *this, hsv_color_t *hsv, uint8_t *weight, int img_size) {
+  const int n = this->sum_channels;
   uint64_t * const sat_hist = this->sat_hist;
   int * const most_used_hue = this->most_used_hue;
-  const int darkness_limit = this->parm.darkness_limit;
-  const int hue_win_size = this->parm.hue_win_size;
+  const int darkness_limit = this->active_parm.darkness_limit;
+  const int hue_win_size = this->active_parm.hue_win_size;
 
   memset(sat_hist, 0, (n * (s_MAX+1) * sizeof(uint64_t)));
 
   while (img_size--) {
-    if (hsv->v > darkness_limit) {
+    if (hsv->v >= darkness_limit) {
       int h = hsv->h;
       int c;
       for (c = 0; c < n; ++c) {
         if (h > (most_used_hue[c] - hue_win_size) && h < (most_used_hue[c] + hue_win_size))
-          sat_hist[c * (s_MAX+1) + hsv->s] += *weight * hsv->v;
-        ++weight;
+          sat_hist[c * (s_MAX+1) + hsv->s] += weight[c] * hsv->v;
       }
-    } else
-      weight += n;
+    }
+    weight += n;
     ++hsv;
   }
 }
@@ -562,10 +576,10 @@ static void calc_sat_hist(atmo_post_plugin_t *this, hsv_color_t *hsv, int *weigh
 
 static void calc_windowed_sat_hist(atmo_post_plugin_t *this) {
   int i, c, w;
-  const int n = this->num_channels.sum;
+  const int n = this->sum_channels;
   uint64_t * const sat_hist = this->sat_hist;
   uint64_t * const w_sat_hist = this->w_sat_hist;
-  const int sat_win_size = this->parm.sat_win_size;
+  const int sat_win_size = this->active_parm.sat_win_size;
 
   memset(w_sat_hist, 0, (n * (s_MAX+1) * sizeof(uint64_t)));
 
@@ -591,7 +605,7 @@ static void calc_windowed_sat_hist(atmo_post_plugin_t *this) {
 
 static void calc_most_used_sat(atmo_post_plugin_t *this) {
   int i, c;
-  const int n = this->num_channels.sum;
+  const int n = this->sum_channels;
   uint64_t * const w_sat_hist = this->w_sat_hist;
   int * const most_used_sat = this->most_used_sat;
 
@@ -609,18 +623,36 @@ static void calc_most_used_sat(atmo_post_plugin_t *this) {
 }
 
 
-static int calc_average_brightness(hsv_color_t *hsv, int img_size, const int darkness_limit) {
-  int n = 0;
-  uint64_t v_avg = 0;
+static void calc_average_brightness(atmo_post_plugin_t *this, hsv_color_t *hsv, uint8_t *weight, int img_size) {
+  int c;
+  const int n = this->sum_channels;
+  const int darkness_limit = this->active_parm.darkness_limit;
+  const uint64_t bright = this->active_parm.brightness;
+  uint64_t * const avg_bright = this->avg_bright;
+  int * const avg_cnt = this->avg_cnt;
+
+  memset(avg_bright, 0, (n * sizeof(uint64_t)));
+  memset(avg_cnt, 0, (n * sizeof(int)));
 
   while (img_size--) {
-    if (hsv->v > darkness_limit)
-      v_avg += hsv->v;
-    ++n;
+    const int v = hsv->v;
+    if (v >= darkness_limit) {
+      for (c = 0; c < n; ++c) {
+        avg_bright[c] += v * weight[c];
+        avg_cnt[c] += weight[c];
+      }
+    }
+    weight += n;
     ++hsv;
   }
 
-  return (int)(v_avg / n);
+  for (c = 0; c < n; ++c) {
+    if (avg_cnt[c]) {
+      avg_bright[c] = (avg_bright[c] * bright) / (avg_cnt[c] * ((uint64_t)100));
+      if (avg_bright[c] > v_MAX)
+        avg_bright[c] = v_MAX;
+    }
+  }
 }
 
 
@@ -675,16 +707,13 @@ static void hsv_to_rgb(rgb_color_t *rgb, double h, double s, double v) {
 }
 
 
-static void calc_rgb_values(atmo_post_plugin_t *this, int v_avg)
+static void calc_rgb_values(atmo_post_plugin_t *this)
 {
   int c;
-  const int n = this->num_channels.sum;
-  double v = (v_avg * this->parm.brightness) / 100.0;
-  if (v > 255.0)
-    v = 255.0;
+  const int n = this->sum_channels;
 
   for (c = 0; c < n; ++c)
-    hsv_to_rgb(&this->analyzed_colors[c], this->most_used_hue[c], this->most_used_sat[c], v);
+    hsv_to_rgb(&this->analyzed_colors[c], this->most_used_hue[c], this->most_used_sat[c], this->avg_bright[c]);
 }
 
 
@@ -701,7 +730,7 @@ static void *atmo_grab_loop (void *this_gen) {
   int edge_weighting = 0;
   int running = 1;
   hsv_color_t *hsv_img = NULL;
-  int *weight = NULL;
+  uint8_t *weight = NULL;
   struct timeval tvnow, tvlast, tvdiff;
   useconds_t analyze_rate;
 
@@ -744,11 +773,11 @@ static void *atmo_grab_loop (void *this_gen) {
     if (grab_width > 0 && grab_height > 0) {
 
         /* calculate size of analyze image */
-      analyze_width = (this->parm.analyze_size + 1) * 64;
+      analyze_width = (this->active_parm.analyze_size + 1) * 64;
       analyze_height = (analyze_width * grab_height) / grab_width;
 
         /* calculate size of grab (sub) window */
-      overscan = this->parm.overscan;
+      overscan = this->active_parm.overscan;
       if (overscan) {
         frame->crop_left = frame->crop_right = grab_width * overscan / 1000;
         frame->crop_top = frame->crop_bottom = grab_height * overscan / 1000;
@@ -775,7 +804,7 @@ static void *atmo_grab_loop (void *this_gen) {
             free(weight);
             alloc_img_size = img_size;
             hsv_img = (hsv_color_t *) malloc(img_size * sizeof(hsv_color_t));
-            weight = (int *) malloc(img_size * this->num_channels.sum * sizeof(int));
+            weight = (uint8_t *) malloc(img_size * this->sum_channels * sizeof(uint8_t));
             if (!hsv_img || !weight)
               break;
             last_analyze_width = 0;
@@ -784,8 +813,8 @@ static void *atmo_grab_loop (void *this_gen) {
           }
 
             /* calculate weight image */
-          if (analyze_width != last_analyze_width || analyze_height != last_analyze_height || edge_weighting != this->parm.edge_weighting) {
-            edge_weighting = this->parm.edge_weighting;
+          if (analyze_width != last_analyze_width || analyze_height != last_analyze_height || edge_weighting != this->active_parm.edge_weighting) {
+            edge_weighting = this->active_parm.edge_weighting;
             last_analyze_width = analyze_width;
             last_analyze_height = analyze_height;
             calc_weight(this, weight, analyze_width, analyze_height, edge_weighting);
@@ -800,9 +829,9 @@ static void *atmo_grab_loop (void *this_gen) {
           calc_sat_hist(this, hsv_img, weight, img_size);
           calc_windowed_sat_hist(this);
           calc_most_used_sat(this);
-          int v_avg = calc_average_brightness(hsv_img, img_size, this->parm.darkness_limit);
+          calc_average_brightness(this, hsv_img, weight, img_size);
           pthread_mutex_lock(&this->lock);
-          calc_rgb_values(this, v_avg);
+          calc_rgb_values(this);
           pthread_mutex_unlock(&this->lock);
 
           llprintf(LOG_2, "grab %ld.%03ld: vpts=%ld\n", tvlast.tv_sec, tvlast.tv_usec / 1000, frame->vpts);
@@ -816,7 +845,7 @@ static void *atmo_grab_loop (void *this_gen) {
     }
 
       /* loop with analyze rate duration */
-    analyze_rate = this->parm.analyze_rate * 1000;
+    analyze_rate = this->active_parm.analyze_rate * 1000;
     gettimeofday(&tvnow, NULL);
     timersub(&tvnow, &tvlast, &tvdiff);
     if (tvdiff.tv_sec == 0 && tvdiff.tv_usec < analyze_rate)
@@ -852,9 +881,9 @@ static void reset_filters(atmo_post_plugin_t *this) {
 static void percent_filter(atmo_post_plugin_t *this) {
   rgb_color_t *act = this->analyzed_colors;
   rgb_color_t *out = this->filtered_colors;
-  const int old_p = this->parm.filter_smoothness;
+  const int old_p = this->active_parm.filter_smoothness;
   const int new_p = 100 - old_p;
-  int n = this->num_channels.sum;
+  int n = this->sum_channels;
 
   while (n--) {
     out->r = (act->r * new_p + out->r * old_p) / 100;
@@ -871,11 +900,11 @@ static void mean_filter(atmo_post_plugin_t *this) {
   rgb_color_t *out = this->filtered_colors;
   rgb_color_t *mean_values = this->mean_filter_values;
   rgb_color_sum_t *mean_sums = this->mean_filter_sum_values;
-  const int64_t mean_threshold = (int64_t) ((double) this->parm.filter_threshold * 3.6);
-  const int old_p = this->parm.filter_smoothness;
+  const int64_t mean_threshold = (int64_t) ((double) this->active_parm.filter_threshold * 3.6);
+  const int old_p = this->active_parm.filter_smoothness;
   const int new_p = 100 - old_p;
-  int n = this->num_channels.sum;
-  const int filter_length = this->parm.filter_length;
+  int n = this->sum_channels;
+  const int filter_length = this->active_parm.filter_length;
   const int64_t mean_length = (filter_length < OUTPUT_RATE) ? 1: filter_length / OUTPUT_RATE;
   const int reinitialize = ((int)mean_length != this->old_mean_length);
   this->old_mean_length = (int)mean_length;
@@ -926,14 +955,14 @@ static void mean_filter(atmo_post_plugin_t *this) {
 
 
 static void apply_white_calibration(atmo_post_plugin_t *this) {
-  const int wc_red = this->parm.wc_red;
-  const int wc_green = this->parm.wc_green;
-  const int wc_blue = this->parm.wc_blue;
+  const int wc_red = this->active_parm.wc_red;
+  const int wc_green = this->active_parm.wc_green;
+  const int wc_blue = this->active_parm.wc_blue;
   if (wc_red == 255 && wc_green == 255 && wc_blue == 255)
     return;
 
   rgb_color_t *out = this->output_colors;
-  int n = this->num_channels.sum;
+  int n = this->sum_channels;
   while (n--) {
     out->r = (uint8_t)((int)out->r * wc_red / 255);
     out->g = (uint8_t)((int)out->g * wc_green / 255);
@@ -944,13 +973,13 @@ static void apply_white_calibration(atmo_post_plugin_t *this) {
 
 
 static void apply_gamma_correction(atmo_post_plugin_t *this) {
-  const int igamma = this->parm.gamma;
+  const int igamma = this->active_parm.gamma;
   if (igamma <= 10)
     return;
 
   const double gamma = (double)igamma / 10.0;
   rgb_color_t *out = this->output_colors;
-  int n = this->num_channels.sum;
+  int n = this->sum_channels;
   while (n--) {
     out->r = (uint8_t)(pow((double)out->r / 255.0, gamma) * 255.0);
     out->g = (uint8_t)(pow((double)out->g / 255.0, gamma) * 255.0);
@@ -965,7 +994,7 @@ static void *atmo_output_loop (void *this_gen) {
   post_video_port_t *port = this->port;
   xine_ticket_t *ticket = this->post_plugin.running_ticket;
   output_driver_t *output_driver = this->output_driver;
-  int colors_size = this->num_channels.sum * sizeof(rgb_color_t);
+  int colors_size = this->sum_channels * sizeof(rgb_color_t);
   int running = 1;
   struct timeval tvnow, tvlast, tvdiff, tvfirst;
 
@@ -997,7 +1026,7 @@ static void *atmo_output_loop (void *this_gen) {
 
       /* Transfer analyzed colors into filtered colors */
     pthread_mutex_lock(&this->lock);
-    switch (this->parm.filter) {
+    switch (this->active_parm.filter) {
     case 1:
       percent_filter(this);
       break;
@@ -1018,7 +1047,7 @@ static void *atmo_output_loop (void *this_gen) {
       /* Output colors */
     gettimeofday(&tvnow, NULL);
     timersub(&tvnow, &tvfirst, &tvdiff);
-    if ((tvdiff.tv_sec * 1000 + tvdiff.tv_usec / 1000) >= this->parm.start_delay) {
+    if ((tvdiff.tv_sec * 1000 + tvdiff.tv_usec / 1000) >= this->active_parm.start_delay) {
         if (memcmp(this->output_colors, this->last_output_colors, colors_size)) {
           output_driver->output_colors(output_driver, this->output_colors, this->last_output_colors);
           memcpy(this->last_output_colors, this->output_colors, colors_size);
@@ -1056,10 +1085,10 @@ static void *atmo_output_loop (void *this_gen) {
 
 
 static void config_channels(atmo_post_plugin_t *this) {
-  int n = this->num_channels.top + this->num_channels.bottom + this->num_channels.left + this->num_channels.right +
-          this->num_channels.center +
-          this->num_channels.top_left + this->num_channels.top_right + this->num_channels.bottom_left + this->num_channels.bottom_right;
-  this->num_channels.sum = n;
+  int n = this->parm.top + this->parm.bottom + this->parm.left + this->parm.right +
+          this->parm.center +
+          this->parm.top_left + this->parm.top_right + this->parm.bottom_left + this->parm.bottom_right;
+  this->sum_channels = n;
 
   if (n)
   {
@@ -1072,6 +1101,9 @@ static void config_channels(atmo_post_plugin_t *this) {
     this->w_sat_hist = (uint64_t *) calloc(n * (s_MAX + 1), sizeof(uint64_t));
     this->most_used_sat = (int *) calloc(n, sizeof(int));
 
+    this->avg_cnt = (int *) calloc(n, sizeof(int));
+    this->avg_bright = (uint64_t *) calloc(n, sizeof(uint64_t));
+
     this->analyzed_colors = (rgb_color_t *) calloc(n, sizeof(rgb_color_t));
     this->filtered_colors = (rgb_color_t *) calloc(n, sizeof(rgb_color_t));
     this->output_colors = (rgb_color_t *) calloc(n, sizeof(rgb_color_t));
@@ -1081,13 +1113,13 @@ static void config_channels(atmo_post_plugin_t *this) {
   }
 
   llprintf(LOG_1, "configure channels top %d, bottom %d, left %d, right %d, center %d, topLeft %d, topRight %d, bottomLeft %d, bottomRight %d\n",
-                  this->num_channels.top, this->num_channels.bottom, this->num_channels.left, this->num_channels.right, this->num_channels.center,
-                  this->num_channels.top_left, this->num_channels.top_right, this->num_channels.bottom_left, this->num_channels.bottom_right);
+                  this->parm.top, this->parm.bottom, this->parm.left, this->parm.right, this->parm.center,
+                  this->parm.top_left, this->parm.top_right, this->parm.bottom_left, this->parm.bottom_right);
 }
 
 
 static void free_channels(atmo_post_plugin_t *this) {
-  if (this->num_channels.sum)
+  if (this->sum_channels)
   {
     free(this->hue_hist);
     free(this->w_hue_hist);
@@ -1097,6 +1129,9 @@ static void free_channels(atmo_post_plugin_t *this) {
     free(this->sat_hist);
     free(this->w_sat_hist);
     free(this->most_used_sat);
+
+    free(this->avg_bright);
+    free(this->avg_cnt);
 
     free(this->analyzed_colors);
     free(this->filtered_colors);
@@ -1160,12 +1195,13 @@ static void close_output_driver(atmo_post_plugin_t *this) {
 
   if (this->driver_opened) {
       /* Switch all channels off */
-    int colors_size = this->num_channels.sum * sizeof(rgb_color_t);
+    int colors_size = this->sum_channels * sizeof(rgb_color_t);
     memset(this->output_colors, 0, colors_size);
     if (memcmp(this->output_colors, this->last_output_colors, colors_size))
       this->output_driver->output_colors(this->output_driver, this->output_colors, this->last_output_colors);
 
-    this->output_driver->close(this->output_driver);
+    if (this->output_driver->close(this->output_driver))
+      xine_log(this->post_plugin.xine, XINE_LOG_PLUGIN, "atmo: output driver: %s!\n", this->output_driver->errmsg);
     this->driver_opened = 0;
     llprintf(LOG_1, "output driver closed\n");
   }
@@ -1174,82 +1210,54 @@ static void close_output_driver(atmo_post_plugin_t *this) {
 
 static void open_output_driver(atmo_post_plugin_t *this) {
 
-  if (!this->parm.enabled || this->driver != this->parm.driver || strcmp(this->driver_param, this->parm.driver_param))
+  if (!this->parm.enabled || this->active_parm.driver != this->parm.driver || strcmp(this->active_parm.driver_param, this->parm.driver_param))
     close_output_driver(this);
 
   if (this->parm.enabled) {
-    num_channels_t num_channels;
-    int start = 1, configure = 0;
-
-    if (this->num_channels.top != this->parm.top ||
-                    this->num_channels.bottom != this->parm.bottom ||
-                    this->num_channels.left != this->parm.left ||
-                    this->num_channels.right != this->parm.right ||
-                    this->num_channels.center != this->parm.center ||
-                    this->num_channels.top_left != this->parm.top_left ||
-                    this->num_channels.top_right != this->parm.top_right ||
-                    this->num_channels.bottom_left != this->parm.bottom_left ||
-                    this->num_channels.bottom_right != this->parm.bottom_right) {
-      configure = 1;
-    }
-
-    num_channels.top = this->parm.top;
-    num_channels.bottom = this->parm.bottom;
-    num_channels.left = this->parm.left;
-    num_channels.right = this->parm.right;
-    num_channels.center = this->parm.center;
-    num_channels.top_left = this->parm.top_left;
-    num_channels.top_right = this->parm.top_right;
-    num_channels.bottom_left = this->parm.bottom_left;
-    num_channels.bottom_right = this->parm.bottom_right;
+    int start = 1;
+    atmo_parameters_t parm = this->parm;
 
       /* open output driver */
     if (!this->driver_opened) {
-      this->driver = this->parm.driver;
-      strcpy(this->driver_param, this->parm.driver_param);
-
-      if ((this->output_driver = get_output_driver(&this->output_drivers, this->driver)) == NULL) {
+      if ((this->output_driver = get_output_driver(&this->output_drivers, this->parm.driver)) == NULL) {
         xine_log(this->post_plugin.xine, XINE_LOG_PLUGIN, "atmo: no valid output driver selected!\n");
         start = 0;
-      } else if (this->output_driver->open(this->output_driver, this->driver_param, &num_channels)) {
+      } else if (this->output_driver->open(this->output_driver, &this->parm)) {
         xine_log(this->post_plugin.xine, XINE_LOG_PLUGIN, "atmo: can't open output driver: %s!\n", this->output_driver->errmsg);
         start = 0;
       } else {
         this->driver_opened = 1;
         llprintf(LOG_1, "output driver opened\n");
       }
-    } else if (configure) {
-      if (this->output_driver->configure(this->output_driver, &num_channels)) {
+    } else {
+      if (this->output_driver->configure(this->output_driver, &this->parm)) {
         xine_log(this->post_plugin.xine, XINE_LOG_PLUGIN, "atmo: can't configure output driver: %s!\n", this->output_driver->errmsg);
         start = 0;
       }
     }
 
-    if (this->num_channels.top != num_channels.top ||
-                    this->num_channels.bottom != num_channels.bottom ||
-                    this->num_channels.left != num_channels.left ||
-                    this->num_channels.right != num_channels.right ||
-                    this->num_channels.center != num_channels.center ||
-                    this->num_channels.top_left != num_channels.top_left ||
-                    this->num_channels.top_right != num_channels.top_right ||
-                    this->num_channels.bottom_left != num_channels.bottom_left ||
-                    this->num_channels.bottom_right != num_channels.bottom_right) {
+    if (join_post_api_parameters(&atmo_param_descr, &parm, &this->parm)) {
+      char buf[512];
+      build_post_api_parameter_string(buf, sizeof(buf), &atmo_param_descr, &this->parm, &this->default_parm);
+      this->post_plugin.xine->config->update_string(this->post_plugin.xine->config, "post.atmo.parameters", buf);
+    }
+
+    if (this->active_parm.top != this->parm.top ||
+                    this->active_parm.bottom != this->parm.bottom ||
+                    this->active_parm.left != this->parm.left ||
+                    this->active_parm.right != this->parm.right ||
+                    this->active_parm.center != this->parm.center ||
+                    this->active_parm.top_left != this->parm.top_left ||
+                    this->active_parm.top_right != this->parm.top_right ||
+                    this->active_parm.bottom_left != this->parm.bottom_left ||
+                    this->active_parm.bottom_right != this->parm.bottom_right) {
       free_channels(this);
-      this->num_channels = num_channels;
       config_channels(this);
     }
 
-    this->parm.top = num_channels.top;
-    this->parm.bottom = num_channels.bottom;
-    this->parm.left = num_channels.left;
-    this->parm.right = num_channels.right;
-    this->parm.center = num_channels.center;
-    this->parm.top_left = num_channels.top_left;
-    this->parm.top_right = num_channels.top_right;
-    this->parm.bottom_left = num_channels.bottom_left;
-    this->parm.bottom_right = num_channels.bottom_right;
+    this->active_parm = this->parm;
 
-    if (!this->num_channels.sum)
+    if (!this->sum_channels)
       start = 0;
 
     if (start) {
@@ -1310,7 +1318,6 @@ static xine_post_api_descr_t *atmo_get_param_descr(void)
 static int atmo_set_parameters(xine_post_t *this_gen, void *parm_gen)
 {
   atmo_post_plugin_t *this = (atmo_post_plugin_t *)this_gen;
-  int enabled = this->parm.enabled;
 
   if (join_post_api_parameters(&atmo_param_descr, &this->parm, parm_gen)) {
     char buf[512];
@@ -1321,14 +1328,32 @@ static int atmo_set_parameters(xine_post_t *this_gen, void *parm_gen)
     pthread_mutex_lock(&this->port_lock);
     if (this->port) {
       if (this->parm.enabled) {
-        if (!enabled)
+        if (!this->active_parm.enabled)
           open_output_driver(this);
+        else {
+          this->active_parm.analyze_rate = this->parm.analyze_rate;
+          this->active_parm.brightness = this->parm.brightness;
+          this->active_parm.darkness_limit = this->parm.darkness_limit;
+          this->active_parm.filter = this->parm.filter;
+          this->active_parm.filter_length = this->parm.filter_length;
+          this->active_parm.filter_smoothness = this->parm.filter_smoothness;
+          this->active_parm.filter_threshold = this->parm.filter_threshold;
+          this->active_parm.gamma = this->parm.gamma;
+          this->active_parm.hue_win_size = this->parm.hue_win_size;
+          this->active_parm.sat_win_size = this->parm.sat_win_size;
+          this->active_parm.hue_threshold = this->parm.hue_threshold;
+          this->active_parm.start_delay = this->parm.start_delay;
+          this->active_parm.wc_blue = this->parm.wc_blue;
+          this->active_parm.wc_green = this->parm.wc_green;
+          this->active_parm.wc_red = this->parm.wc_red;
+        }
       } else {
-        if (enabled) {
+        if (this->active_parm.enabled) {
           stop_threads(this, 1);
           close_output_driver(this);
         }
       }
+      this->active_parm.enabled = this->parm.enabled;
     }
     pthread_mutex_unlock(&this->port_lock);
   }
@@ -1417,7 +1442,6 @@ static post_plugin_t *atmo_open_plugin(post_class_t *class_gen,
   input_param->data = &post_api;
   xine_list_push_back(this->post_plugin.input, input_param);
 
-  this->driver = -1;
   pthread_mutex_init(&this->lock, NULL);
   pthread_mutex_init(&this->port_lock, NULL);
   pthread_cond_init(&this->thread_started, NULL);
@@ -1428,14 +1452,15 @@ static post_plugin_t *atmo_open_plugin(post_class_t *class_gen,
   this->parm.analyze_rate = 40;
   this->parm.analyze_size = 1;
   this->parm.brightness = 100;
-  this->parm.darkness_limit = 10;
-  this->parm.edge_weighting = 8;
+  this->parm.darkness_limit = 1;
+  this->parm.edge_weighting = 80;
   this->parm.filter = 2;
   this->parm.filter_length = 500;
   this->parm.filter_smoothness = 50;
   this->parm.filter_threshold = 40;
   this->parm.hue_win_size = 3;
   this->parm.sat_win_size = 3;
+  this->parm.hue_threshold = 93;
   this->parm.wc_red = 255;
   this->parm.wc_green = 255;
   this->parm.wc_blue = 255;

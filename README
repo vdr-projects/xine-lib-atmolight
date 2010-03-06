@@ -131,20 +131,37 @@ analyze_size       1                Size of analyze window. The window width is 
                                     analyze window.
                                     Valid values: 0 ... 3
 
+                                    For DF10CH controller you do not have to specify this parameter here because it is read
+                                    from the controller configuration data. Use the DF10CH setup program to configure your
+                                    desired analyze size.
+                                    
 overscan           30               Ignored overscan border of grabbed video frame.
                                     Unit is percentage of 1000. e.g. 30 -> 3%
                                     Valid values: 0 ... 200
 
-darkness_limit     10               Minimum brightness of pixel. Value's below are interpreted as black pixel.
+                                    For DF10CH controller you do not have to specify this parameter here because it is read
+                                    from the controller configuration data. Use the DF10CH setup program to configure your
+                                    desired overscan.
+                                    
+edge_weighting     80               Power of edge weighting.
+																		Value is divided by 10 e.g. 80 -> power of 8
+																		Valid values 10 ... 200
+
+                                    For DF10CH controller you do not have to specify this parameter here because it is read
+                                    from the controller configuration data. Use the DF10CH setup program to configure your
+                                    desired edge weighting.
+
+darkness_limit     1                Minimum brightness of pixel. Value's below are interpreted as black pixel.
                                     Used to detect and skip "black borders" in video.
                                     Valid values are 0 ... 100
-
-edge_weighting     8                Power of edge weighting. Valid values 1 ... 30
 
 hue_win_size       3                Windowing size for HUE. Valid values 0 ... 5
 
 sat_win_size       3                Windowing size for saturation. Valid values 0 ... 5
 
+hue_treshold			 93								Threshold limit for change of color.
+																		Unit percentage of 100. Valid values 1 ... 100
+																		 
 filter             combined         Select's smoothness filter. Currently there are two filters
                                     supported: percentage and combined.
                                     Valid values: off, percentage, combined
@@ -185,5 +202,5 @@ gamma              0                Gamma correction factor for red, green and b
 start_delay        250              Delay after stream start before first output is send [ms].
                                     Valid values 0 ... 5000.
 
-enable             1                Enable/Disable output of color values to atmolight controller
+enable             1                Enable/Disable output of color values to atmolight controller.
                                             

@@ -24,7 +24,7 @@ install: all
 clean:
 	@-rm -f *.so* *.o
 
-xine_post_atmo.o: xine_post_atmo.c output_driver.h
+xine_post_atmo.o: xine_post_atmo.c output_driver.h df10ch_usb_proto.h
 	$(CC) $(CFLAGS) $(CFLAGS_XINE) $(CFLAGS_USB) -c -o $@ $<
 
 $(XINEPOSTATMO): xine_post_atmo.o

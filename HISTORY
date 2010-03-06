@@ -5,8 +5,14 @@ Added support for "on the fly" parameter changes.
 Added 'start_delay' plugin parameter for individual adjustment of start delay after start of new stream.
 Changed start delay default from 1000ms to 250ms
 Added 'enable' plugin parameter for switching the atmolight on/off on the fly.
-DF10CH channel layout configuration parameters are now mandatory.
-Changed calculation of weights for border area
+DF10CH configuration parameters are now mandatory.
+Improved calculation of weights for border area
+Improved calculation of average brightness
+Add support for DF10CH config version 2 (overscan, edge weighting, analyze size are now read from controller)
+Improved DF10CH driver error logging
+Added 'hue_threshold' parameter.
+Modify 'edge weighting' parameter. Value is now divided by 10 to reach more fine control
+Changed darkness limit default from 10 to 1
 
 --- Version 0.4
 
