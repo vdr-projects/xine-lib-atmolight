@@ -1453,7 +1453,7 @@ static post_plugin_t *atmo_open_plugin(post_class_t *class_gen,
   this->parm.analyze_size = 1;
   this->parm.brightness = 100;
   this->parm.darkness_limit = 1;
-  this->parm.edge_weighting = 80;
+  this->parm.edge_weighting = 60;
   this->parm.filter = 2;
   this->parm.filter_length = 500;
   this->parm.filter_smoothness = 50;

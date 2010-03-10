@@ -1,7 +1,7 @@
 --- Version 0.5
 
 Added storage of actual plugin parameters into xine configuration key 'post.atmo.parameters'.
-Added support for "on the fly" parameter changes.
+Added support for 'on the fly' parameter changes.
 Added 'start_delay' plugin parameter for individual adjustment of start delay after start of new stream.
 Changed start delay default from 1000ms to 250ms
 Added 'enable' plugin parameter for switching the atmolight on/off on the fly.
@@ -12,7 +12,8 @@ Add support for DF10CH config version 2 (overscan, edge weighting, analyze size 
 Improved DF10CH driver error logging
 Added 'hue_threshold' parameter.
 Modify 'edge weighting' parameter. Value is now divided by 10 to reach more fine control
-Changed darkness limit default from 10 to 1
+Changed 'edge weighting' default from 80 to 60
+Changed 'darkness limit' default from 10 to 1
 
 --- Version 0.4
 

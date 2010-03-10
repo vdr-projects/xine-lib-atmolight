@@ -61,6 +61,19 @@ When using DF10CH controller(s):
 Parameters understood by this plugin:
 -------------------------------------
 
+The plugin stores the actual parameter setting in the xinelib config file
+under the key 'post.atmo.parameters'.
+Plugin parameters specified at the command line are mandatory and always
+override the parameters stored in the xinelib config file at startup time.
+You should specify all 'static' parameters like output driver or section layout
+at the command line.
+Parameters that you wish to trim while player is running should not be specified within the
+command line. Player's like xine-ui have GUI support for changing plugin parameters
+(press <alt><shift>p to show the post processing panel). 
+Changes of Parameters marked with * will be immediately applied while player is running.
+The other parameters will be applied after a stream close/open sequence (this happens already
+when switching a channel within VDR).
+
 Parameter          Default          Description
 
 driver             none             Selects output driver. Currently supported are:
@@ -122,10 +135,10 @@ bottom_right       0                Number of RGB channel groups per Area.
                                     desired layout.
                                     
                                     
-analyze_rate       40               Rate of frame grabbing and video analysis. Unit milliseconds.
+analyze_rate *     40               Rate of frame grabbing and video analysis. Unit milliseconds.
                                     Valid values: 10 ... 500
 
-analyze_size       1                Size of analyze window. The window width is calculated by (analyze_size+1)*64 pixel.
+analyze_size *     1                Size of analyze window. The window width is calculated by (analyze_size+1)*64 pixel.
                                     The window height is calcuated aspect correct according to the grabbed video
                                     window size. So a analyze size of 1 for a 16:9 video will give us a 128x72 pixel
                                     analyze window.
@@ -135,7 +148,7 @@ analyze_size       1                Size of analyze window. The window width is 
                                     from the controller configuration data. Use the DF10CH setup program to configure your
                                     desired analyze size.
                                     
-overscan           30               Ignored overscan border of grabbed video frame.
+overscan *         30               Ignored overscan border of grabbed video frame.
                                     Unit is percentage of 1000. e.g. 30 -> 3%
                                     Valid values: 0 ... 200
 
@@ -143,7 +156,7 @@ overscan           30               Ignored overscan border of grabbed video fra
                                     from the controller configuration data. Use the DF10CH setup program to configure your
                                     desired overscan.
                                     
-edge_weighting     80               Power of edge weighting.
+edge_weighting *   60               Power of edge weighting.
 																		Value is divided by 10 e.g. 80 -> power of 8
 																		Valid values 10 ... 200
 
@@ -151,31 +164,31 @@ edge_weighting     80               Power of edge weighting.
                                     from the controller configuration data. Use the DF10CH setup program to configure your
                                     desired edge weighting.
 
-darkness_limit     1                Minimum brightness of pixel. Value's below are interpreted as black pixel.
+darkness_limit *   1                Minimum brightness of pixel. Value's below are interpreted as black pixel.
                                     Used to detect and skip "black borders" in video.
                                     Valid values are 0 ... 100
 
-hue_win_size       3                Windowing size for HUE. Valid values 0 ... 5
+hue_win_size *     3                Windowing size for HUE. Valid values 0 ... 5
 
-sat_win_size       3                Windowing size for saturation. Valid values 0 ... 5
+sat_win_size *     3                Windowing size for saturation. Valid values 0 ... 5
 
-hue_treshold			 93								Threshold limit for change of color.
+hue_treshold	*		 93								Threshold limit for change of color.
 																		Unit percentage of 100. Valid values 1 ... 100
 																		 
-filter             combined         Select's smoothness filter. Currently there are two filters
+filter *           combined         Select's smoothness filter. Currently there are two filters
                                     supported: percentage and combined.
                                     Valid values: off, percentage, combined
 
-filter_smoothness  50               Controls filter smoothness of percentage filter.
+filter_smoothness * 50              Controls filter smoothness of percentage filter.
                                     Unit percentage of 100. Valid values 1 ... 100
 
-filter_length      500              Controls filter length of combined filter.
+filter_length *    500              Controls filter length of combined filter.
                                     Unit milliseconds. Valid values 300 ... 5000
 
-filter_threshold   40               Controls filter threshold of combined filter.
+filter_threshold * 40               Controls filter threshold of combined filter.
                                     Unit percentage of 100. Valid values 1 ... 100
                                     
-brightness	       100              Controls brightness of generated color values.
+brightness	*      100              Controls brightness of generated color values.
                                     Unit percentage of 100. Valid values 50 ... 300
                                     
                                     Note: When using DF10CH controller(s) it is better to use the white calibration or
@@ -184,14 +197,14 @@ brightness	       100              Controls brightness of generated color values
 
 wc_red
 wc_green
-wc_blue            255              White calibration values for red, green and blue channel.
+wc_blue *          255              White calibration values for red, green and blue channel.
                                     Valid values 0 ... 255.
                                     
                                     Note: When using DF10CH controller(s) it is better to use the white calibration 
                                     feature of the DF10CH setup program instead of this parameter because you will
                                     lose lesser PWM resolution.
 
-gamma              0                Gamma correction factor for red, green and blue channel.
+gamma *            0                Gamma correction factor for red, green and blue channel.
                                     Value is divided by 10 e.g. 25 -> gamma 2.5
                                     Valid values 0 ... 50. 0 means no gamma correction
                                     
@@ -199,8 +212,8 @@ gamma              0                Gamma correction factor for red, green and b
                                     feature of the DF10CH setup program instead of this parameter because you will
                                     lose no PWM resolution.
 
-start_delay        250              Delay after stream start before first output is send [ms].
+start_delay *      250              Delay after stream start before first output is send [ms].
                                     Valid values 0 ... 5000.
 
-enable             1                Enable/Disable output of color values to atmolight controller.
+enable *           1                Enable/Disable output of color values to atmolight controller.
                                             
