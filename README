@@ -216,4 +216,16 @@ start_delay *      250              Delay after stream start before first output
                                     Valid values 0 ... 5000.
 
 enabled *          1                Enable/Disable output of color values to atmolight controller.
-                                            
+
+
+
+Additional patches located in subdirectory 'patches':
+-----------------------------------------------------
+
+xine-ui-atmolight-switch.patch
+
+This is a patch for the xine-ui player that extends the player with a 'AtmolightEnable' command
+to switch the Atmolight on/off.
+The command can be bound to keyboard or LIRC keys but it is not supported by the remote interface.
+
+

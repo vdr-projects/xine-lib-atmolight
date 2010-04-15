@@ -1,3 +1,6 @@
+--- Version 0.6
+Add xine-ui-atmolight-switch patch.
+
 --- Version 0.5
 
 Added storage of actual plugin parameters into xine configuration key 'post.atmo.parameters'.
