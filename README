@@ -215,5 +215,5 @@ gamma *            0                Gamma correction factor for red, green and b
 start_delay *      250              Delay after stream start before first output is send [ms].
                                     Valid values 0 ... 5000.
 
-enable *           1                Enable/Disable output of color values to atmolight controller.
+enabled *          1                Enable/Disable output of color values to atmolight controller.
                                             
