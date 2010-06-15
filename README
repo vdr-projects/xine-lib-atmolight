@@ -229,3 +229,12 @@ to switch the Atmolight on/off.
 The command can be bound to keyboard or LIRC keys but it is not supported by the remote interface.
 
 
+xineliboutput-atmolight-switch.patch
+
+This is a patch for the xineliboutput player that extends the player with a 'Atmolight' command
+to switch the Atmolight on/off.
+Send remote command "Atmolight" for toggling on/off, "Atmolight 0" for switching off or "Atmolight 1"
+for switching on.
+Also pressing keyboard key 'a' or sending LIRC command 'Atmolight' toggels the Atmolight.
+
+
