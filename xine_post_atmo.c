@@ -850,6 +850,25 @@ static void *atmo_grab_loop (void *this_gen) {
     timersub(&tvnow, &tvlast, &tvdiff);
     if (tvdiff.tv_sec == 0 && tvdiff.tv_usec < analyze_rate)
       usleep(analyze_rate - tvdiff.tv_usec);
+
+#if 0
+    {
+      gettimeofday(&tvnow, NULL);
+      timersub(&tvnow, &tvlast, &tvdiff);
+      static uint64_t sum_us, peak_us, call_cnt;
+      uint64_t diff_us = tvdiff.tv_sec * 1000000 + tvdiff.tv_usec;
+      if (diff_us > peak_us)
+        peak_us = diff_us;
+      if (call_cnt >= (50*60*3) || peak_us >= 100000) {
+        if (call_cnt)
+          sum_us /= call_cnt;
+        printf("%s: (%s:%d) peak: %.3lf ms  avg: %.3lf ms  calls: %d\n", LOG_MODULE, __XINE_FUNCTION__, __LINE__, ((double)peak_us)/1000.0, ((double)sum_us)/1000.0, (int)call_cnt);
+        call_cnt = sum_us = peak_us = 0;
+      }
+      sum_us += diff_us;
+      ++call_cnt;
+    }
+#endif
   }
 
     /* free grab frame */
@@ -1060,6 +1079,25 @@ static void *atmo_output_loop (void *this_gen) {
     timersub(&tvnow, &tvlast, &tvdiff);
     if (tvdiff.tv_sec == 0 && tvdiff.tv_usec < output_rate)
       usleep(output_rate - tvdiff.tv_usec);
+
+#if 0
+    {
+      gettimeofday(&tvnow, NULL);
+      timersub(&tvnow, &tvlast, &tvdiff);
+      static uint64_t sum_us, peak_us, call_cnt;
+      uint64_t diff_us = tvdiff.tv_sec * 1000000 + tvdiff.tv_usec;
+      if (diff_us > peak_us)
+        peak_us = diff_us;
+      if (call_cnt >= (50*60*3) || peak_us >= 100000) {
+        if (call_cnt)
+          sum_us /= call_cnt;
+        printf("%s: (%s:%d) peak: %.3lf ms  avg: %.3lf ms  calls: %d\n", LOG_MODULE, __XINE_FUNCTION__, __LINE__, ((double)peak_us)/1000.0, ((double)sum_us)/1000.0, (int)call_cnt);
+        call_cnt = sum_us = peak_us = 0;
+      }
+      sum_us += diff_us;
+      ++call_cnt;
+    }
+#endif
   }
 
     /* Turn off Light */
@@ -1449,7 +1487,7 @@ static post_plugin_t *atmo_open_plugin(post_class_t *class_gen,
     /* Set default values for parameters */
   this->parm.enabled = 1;
   this->parm.overscan = 30;
-  this->parm.analyze_rate = 40;
+  this->parm.analyze_rate = 35;
   this->parm.analyze_size = 1;
   this->parm.brightness = 100;
   this->parm.darkness_limit = 1;
