@@ -1,6 +1,7 @@
 --- Version 0.6
 Add xine-ui-atmolight-switch patch.
 Add xineliboutput-atmolight-switch patch.
+Changed 'analyze_rate' default from 40 to 35
 
 --- Version 0.5
 
