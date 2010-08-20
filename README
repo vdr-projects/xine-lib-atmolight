@@ -30,7 +30,7 @@ Requirements:
 -------------
 
 xine-lib-vdpau or xine-lib-1.2 with vdpau support
-Both version must have the vdpau extension patches from here:
+Both version must have the vdpau extension patches version v15 or greater from here:
 http://www.vdr-portal.de/board/thread.php?threadid=86804
 
 For compiling the plugin the xine-lib and libusb-1.0 development

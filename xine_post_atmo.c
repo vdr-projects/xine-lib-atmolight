@@ -792,6 +792,7 @@ static void *atmo_grab_loop (void *this_gen) {
 
         /* grab displayed video frame */
       frame->timeout = GRAB_TIMEOUT;
+      frame->continuous = 1;
       frame->width = analyze_width;
       frame->height = analyze_height;
       if (!(rc = xine_port_send_gui_data(video_port, XINE_GUI_SEND_GRAB_FRAME, frame))) {

@@ -1,3 +1,9 @@
+libxine-atmo-plugin (0.6-0) karmic; urgency=low
+
+  * New upstream release
+
+ -- Andreas Auras <yak54@gmx.net>  Fri, 20 Aug 2010 13:37:11 +0200
+
 libxine-atmo-plugin (0.5-0) karmic; urgency=low
 
   * New upstream release

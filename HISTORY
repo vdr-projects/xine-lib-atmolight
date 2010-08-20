@@ -2,6 +2,7 @@
 Add xine-ui-atmolight-switch patch.
 Add xineliboutput-atmolight-switch patch.
 Changed 'analyze_rate' default from 40 to 35
+Migrate to vdpau-extensions-patch v15. Now this version is minimum requirement!
 
 --- Version 0.5
 
