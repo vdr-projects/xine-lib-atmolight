@@ -1,3 +1,6 @@
+--- Version 0.7
+Added output delay filter which is configurable with new plugin parameter 'filter_delay'
+
 --- Version 0.6
 Add xine-ui-atmolight-switch patch.
 Add xineliboutput-atmolight-switch patch.

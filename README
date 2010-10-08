@@ -187,7 +187,11 @@ filter_length *    500              Controls filter length of combined filter.
 
 filter_threshold * 40               Controls filter threshold of combined filter.
                                     Unit percentage of 100. Valid values 1 ... 100
-                                    
+
+filter_delay       0                Controls delay of output send to controller.
+                                    Unit milliseconds. Valid values 0 ... 1000
+                                    Note: Delay should be specified as multiples of 20ms
+                                                                        
 brightness	*      100              Controls brightness of generated color values.
                                     Unit percentage of 100. Valid values 50 ... 300
                                     

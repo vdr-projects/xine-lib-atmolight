@@ -95,6 +95,7 @@ typedef struct {
   int filter_smoothness;
   int filter_length;
   int filter_threshold;
+  int filter_delay;
   int wc_red;
   int wc_green;
   int wc_blue;
@@ -161,6 +162,8 @@ PARAM_ITEM(POST_PARAM_TYPE_INT, filter_length, NULL, 300, 5000, 0,
   "filter length [ms]")
 PARAM_ITEM(POST_PARAM_TYPE_INT, filter_threshold, NULL, 1, 100, 0,
   "filter threshold [%]")
+PARAM_ITEM(POST_PARAM_TYPE_INT, filter_delay, NULL, 0, 1000, 0,
+  "delay for output send to controller [ms]")
 PARAM_ITEM(POST_PARAM_TYPE_INT, wc_red, NULL, 0, 255, 0,
   "white calibration correction factor of red color channel")
 PARAM_ITEM(POST_PARAM_TYPE_INT, wc_green, NULL, 0, 255, 0,
@@ -216,8 +219,9 @@ typedef struct atmo_post_plugin_s
     /* filter related */
   rgb_color_t *filtered_colors;
   rgb_color_t *mean_filter_values;
+  rgb_color_t *delay_filter_queue;
   rgb_color_sum_t *mean_filter_sum_values;
-  int old_mean_length;
+  int old_mean_length, delay_filter_queue_length, delay_filter_queue_pos;
 } atmo_post_plugin_t;
 
 
@@ -895,6 +899,9 @@ static void *atmo_grab_loop (void *this_gen) {
 
 static void reset_filters(atmo_post_plugin_t *this) {
   this->old_mean_length = 0;
+  this->delay_filter_queue_pos = 0;
+  if (this->delay_filter_queue)
+    memset(this->delay_filter_queue, 0, this->delay_filter_queue_length * this->sum_channels * sizeof(rgb_color_t));
 }
 
 
@@ -971,6 +978,21 @@ static void mean_filter(atmo_post_plugin_t *this) {
     ++mean_sums;
     ++mean_values;
   }
+}
+
+
+static void delay_filter(atmo_post_plugin_t *this) {
+  const int len = this->delay_filter_queue_length;
+  const int n = this->sum_channels;
+  int inp = this->delay_filter_queue_pos;
+  const int outp = ((inp > 0) ? inp: len) - 1;
+
+  memcpy(&this->delay_filter_queue[inp * n], this->filtered_colors, n * sizeof(rgb_color_t));
+  memcpy(this->output_colors, &this->delay_filter_queue[outp * n], n * sizeof(rgb_color_t));
+
+  if (++inp >= len)
+    inp = 0;
+  this->delay_filter_queue_pos = inp;
 }
 
 
@@ -1060,14 +1082,18 @@ static void *atmo_output_loop (void *this_gen) {
     pthread_mutex_unlock(&this->lock);
 
       /* Transfer filtered colors to output colors */
-    memcpy(this->output_colors, this->filtered_colors, colors_size);
-    apply_gamma_correction(this);
-    apply_white_calibration(this);
+    if (this->delay_filter_queue)
+      delay_filter(this);
+    else
+      memcpy(this->output_colors, this->filtered_colors, colors_size);
 
       /* Output colors */
     gettimeofday(&tvnow, NULL);
     timersub(&tvnow, &tvfirst, &tvdiff);
     if ((tvdiff.tv_sec * 1000 + tvdiff.tv_usec / 1000) >= this->active_parm.start_delay) {
+        apply_gamma_correction(this);
+        apply_white_calibration(this);
+
         if (memcmp(this->output_colors, this->last_output_colors, colors_size)) {
           output_driver->output_colors(output_driver, this->output_colors, this->last_output_colors);
           memcpy(this->last_output_colors, this->output_colors, colors_size);
@@ -1149,6 +1175,11 @@ static void config_channels(atmo_post_plugin_t *this) {
     this->last_output_colors = (rgb_color_t *) calloc(n, sizeof(rgb_color_t));
     this->mean_filter_values = (rgb_color_t *) calloc(n, sizeof(rgb_color_t));
     this->mean_filter_sum_values = (rgb_color_sum_t *) calloc(n, sizeof(rgb_color_sum_t));
+    this->delay_filter_queue_length = (this->parm.filter_delay >= OUTPUT_RATE) ? this->parm.filter_delay / OUTPUT_RATE + 1: 0;
+    if (this->delay_filter_queue_length)
+      this->delay_filter_queue = (rgb_color_t *) calloc(n * this->delay_filter_queue_length, sizeof(rgb_color_t));
+    else
+      this->delay_filter_queue = NULL;
   }
 
   llprintf(LOG_1, "configure channels top %d, bottom %d, left %d, right %d, center %d, topLeft %d, topRight %d, bottomLeft %d, bottomRight %d\n",
@@ -1178,6 +1209,7 @@ static void free_channels(atmo_post_plugin_t *this) {
     free(this->last_output_colors);
     free(this->mean_filter_values);
     free(this->mean_filter_sum_values);
+    free(this->delay_filter_queue);
   }
 }
 
@@ -1289,7 +1321,8 @@ static void open_output_driver(atmo_post_plugin_t *this) {
                     this->active_parm.top_left != this->parm.top_left ||
                     this->active_parm.top_right != this->parm.top_right ||
                     this->active_parm.bottom_left != this->parm.bottom_left ||
-                    this->active_parm.bottom_right != this->parm.bottom_right) {
+                    this->active_parm.bottom_right != this->parm.bottom_right ||
+                    this->active_parm.filter_delay != this->parm.filter_delay) {
       free_channels(this);
       config_channels(this);
     }
@@ -1497,6 +1530,7 @@ static post_plugin_t *atmo_open_plugin(post_class_t *class_gen,
   this->parm.filter_length = 500;
   this->parm.filter_smoothness = 50;
   this->parm.filter_threshold = 40;
+  this->parm.filter_delay = 0;
   this->parm.hue_win_size = 3;
   this->parm.sat_win_size = 3;
   this->parm.hue_threshold = 93;
