@@ -1081,23 +1081,23 @@ static void *atmo_output_loop (void *this_gen) {
     }
     pthread_mutex_unlock(&this->lock);
 
-      /* Transfer filtered colors to output colors */
-    if (this->delay_filter_queue)
-      delay_filter(this);
-    else
-      memcpy(this->output_colors, this->filtered_colors, colors_size);
-
-      /* Output colors */
     gettimeofday(&tvnow, NULL);
     timersub(&tvnow, &tvfirst, &tvdiff);
     if ((tvdiff.tv_sec * 1000 + tvdiff.tv_usec / 1000) >= this->active_parm.start_delay) {
-        apply_gamma_correction(this);
-        apply_white_calibration(this);
+        /* Transfer filtered colors to output colors */
+      if (this->delay_filter_queue)
+        delay_filter(this);
+      else
+        memcpy(this->output_colors, this->filtered_colors, colors_size);
 
-        if (memcmp(this->output_colors, this->last_output_colors, colors_size)) {
-          output_driver->output_colors(output_driver, this->output_colors, this->last_output_colors);
-          memcpy(this->last_output_colors, this->output_colors, colors_size);
-        }
+      apply_gamma_correction(this);
+      apply_white_calibration(this);
+
+        /* Output colors */
+      if (memcmp(this->output_colors, this->last_output_colors, colors_size)) {
+        output_driver->output_colors(output_driver, this->output_colors, this->last_output_colors);
+        memcpy(this->last_output_colors, this->output_colors, colors_size);
+      }
     }
 
       /* Loop with output rate duration */
