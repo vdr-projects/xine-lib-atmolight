@@ -742,8 +742,8 @@ static void *atmo_grab_loop (void *this_gen) {
 
   pthread_mutex_lock(&this->lock);
   this->grab_running = &running;
-  pthread_mutex_unlock(&this->lock);
   pthread_cond_broadcast(&this->thread_started);
+  pthread_mutex_unlock(&this->lock);
 
   llprintf(LOG_1, "grab thread running\n");
 
@@ -1044,8 +1044,8 @@ static void *atmo_output_loop (void *this_gen) {
 
   pthread_mutex_lock(&this->lock);
   this->output_running = &running;
-  pthread_mutex_unlock(&this->lock);
   pthread_cond_broadcast(&this->thread_started);
+  pthread_mutex_unlock(&this->lock);
 
   llprintf(LOG_1, "output thread running\n");
 
@@ -1582,20 +1582,20 @@ static void atmo_class_dispose(post_class_t *class_gen)
 static void *atmo_init_plugin(xine_t *xine, void *data)
 {
   atmo_post_class_t *class = (atmo_post_class_t *) calloc(1, sizeof(atmo_post_class_t));
+  if (!class)
+    return NULL;
 
-  if(class) {
-    class->xine = xine;
-    class->post_class.open_plugin     = atmo_open_plugin;
+  class->xine = xine;
+  class->post_class.open_plugin     = atmo_open_plugin;
 #if POST_PLUGIN_IFACE_VERSION < 10
-    class->post_class.get_identifier  = atmo_get_identifier;
-    class->post_class.get_description = atmo_get_description;
-    class->post_class.dispose         = atmo_class_dispose;
+  class->post_class.get_identifier  = atmo_get_identifier;
+  class->post_class.get_description = atmo_get_description;
+  class->post_class.dispose         = atmo_class_dispose;
 #else
-    class->post_class.identifier      = "atmo";
-    class->post_class.description     = N_("Analyze video picture and generate output data for atmolight controllers");
-    class->post_class.dispose         = default_post_class_dispose;
+  class->post_class.identifier      = "atmo";
+  class->post_class.description     = N_("Analyze video picture and generate output data for atmolight controllers");
+  class->post_class.dispose         = default_post_class_dispose;
 #endif
-  }
   return &class->post_class;
 }
 
