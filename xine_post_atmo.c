@@ -219,9 +219,8 @@ typedef struct atmo_post_plugin_s
     /* filter related */
   rgb_color_t *filtered_colors;
   rgb_color_t *mean_filter_values;
-  rgb_color_t *delay_filter_queue;
   rgb_color_sum_t *mean_filter_sum_values;
-  int old_mean_length, delay_filter_queue_length, delay_filter_queue_pos;
+  int old_mean_length;
 } atmo_post_plugin_t;
 
 
@@ -899,9 +898,6 @@ static void *atmo_grab_loop (void *this_gen) {
 
 static void reset_filters(atmo_post_plugin_t *this) {
   this->old_mean_length = 0;
-  this->delay_filter_queue_pos = 0;
-  if (this->delay_filter_queue)
-    memset(this->delay_filter_queue, 0, this->delay_filter_queue_length * this->sum_channels * sizeof(rgb_color_t));
 }
 
 
@@ -981,21 +977,6 @@ static void mean_filter(atmo_post_plugin_t *this) {
 }
 
 
-static void delay_filter(atmo_post_plugin_t *this) {
-  const int len = this->delay_filter_queue_length;
-  const int n = this->sum_channels;
-  int inp = this->delay_filter_queue_pos;
-  const int outp = ((inp > 0) ? inp: len) - 1;
-
-  memcpy(&this->delay_filter_queue[inp * n], this->filtered_colors, n * sizeof(rgb_color_t));
-  memcpy(this->output_colors, &this->delay_filter_queue[outp * n], n * sizeof(rgb_color_t));
-
-  if (++inp >= len)
-    inp = 0;
-  this->delay_filter_queue_pos = inp;
-}
-
-
 static void apply_white_calibration(atmo_post_plugin_t *this) {
   const int wc_red = this->active_parm.wc_red;
   const int wc_green = this->active_parm.wc_green;
@@ -1038,6 +1019,8 @@ static void *atmo_output_loop (void *this_gen) {
   output_driver_t *output_driver = this->output_driver;
   int colors_size = this->sum_channels * sizeof(rgb_color_t);
   int running = 1;
+  int delay_filter_queue_length = 0, delay_filter_queue_pos = 0, filter_delay = 0;
+  rgb_color_t *delay_filter_queue = NULL;
   struct timeval tvnow, tvlast, tvdiff, tvfirst;
 
   _x_post_inc_usage(port);
@@ -1058,6 +1041,7 @@ static void *atmo_output_loop (void *this_gen) {
 
     if (ticket->ticket_revoked) {
       reset_filters(this);
+      filter_delay = 0;
       llprintf(LOG_1, "output thread waiting for new ticket\n");
       ticket->renew(ticket, 0);
       llprintf(LOG_1, "output thread got new ticket\n");
@@ -1084,9 +1068,29 @@ static void *atmo_output_loop (void *this_gen) {
     gettimeofday(&tvnow, NULL);
     timersub(&tvnow, &tvfirst, &tvdiff);
     if ((tvdiff.tv_sec * 1000 + tvdiff.tv_usec / 1000) >= this->active_parm.start_delay) {
+
+        /* Initialize delay filter queue */
+      if (filter_delay != this->active_parm.filter_delay) {
+        free(delay_filter_queue);
+        filter_delay = this->active_parm.filter_delay;
+        delay_filter_queue_length = ((filter_delay >= OUTPUT_RATE) ? filter_delay / OUTPUT_RATE + 1: 0) * this->sum_channels;
+        if (delay_filter_queue_length)
+          delay_filter_queue = (rgb_color_t *) calloc(delay_filter_queue_length, sizeof(rgb_color_t));
+        else
+          delay_filter_queue = NULL;
+      }
+
         /* Transfer filtered colors to output colors */
-      if (this->delay_filter_queue)
-        delay_filter(this);
+      if (delay_filter_queue) {
+        int outp = delay_filter_queue_pos + this->sum_channels;
+        if (outp >= delay_filter_queue_length)
+          outp = 0;
+
+        memcpy(&delay_filter_queue[delay_filter_queue_pos], this->filtered_colors, colors_size);
+        memcpy(this->output_colors, &delay_filter_queue[outp], colors_size);
+
+        delay_filter_queue_pos = outp;
+      }
       else
         memcpy(this->output_colors, this->filtered_colors, colors_size);
 
@@ -1134,6 +1138,8 @@ static void *atmo_output_loop (void *this_gen) {
     memset(this->last_output_colors, 0, colors_size);
   }
 
+  free(delay_filter_queue);
+
   ticket->release(ticket, 0);
 
   pthread_mutex_lock(&this->lock);
@@ -1175,11 +1181,6 @@ static void config_channels(atmo_post_plugin_t *this) {
     this->last_output_colors = (rgb_color_t *) calloc(n, sizeof(rgb_color_t));
     this->mean_filter_values = (rgb_color_t *) calloc(n, sizeof(rgb_color_t));
     this->mean_filter_sum_values = (rgb_color_sum_t *) calloc(n, sizeof(rgb_color_sum_t));
-    this->delay_filter_queue_length = (this->parm.filter_delay >= OUTPUT_RATE) ? this->parm.filter_delay / OUTPUT_RATE + 1: 0;
-    if (this->delay_filter_queue_length)
-      this->delay_filter_queue = (rgb_color_t *) calloc(n * this->delay_filter_queue_length, sizeof(rgb_color_t));
-    else
-      this->delay_filter_queue = NULL;
   }
 
   llprintf(LOG_1, "configure channels top %d, bottom %d, left %d, right %d, center %d, topLeft %d, topRight %d, bottomLeft %d, bottomRight %d\n",
@@ -1209,7 +1210,6 @@ static void free_channels(atmo_post_plugin_t *this) {
     free(this->last_output_colors);
     free(this->mean_filter_values);
     free(this->mean_filter_sum_values);
-    free(this->delay_filter_queue);
   }
 }
 
@@ -1321,8 +1321,7 @@ static void open_output_driver(atmo_post_plugin_t *this) {
                     this->active_parm.top_left != this->parm.top_left ||
                     this->active_parm.top_right != this->parm.top_right ||
                     this->active_parm.bottom_left != this->parm.bottom_left ||
-                    this->active_parm.bottom_right != this->parm.bottom_right ||
-                    this->active_parm.filter_delay != this->parm.filter_delay) {
+                    this->active_parm.bottom_right != this->parm.bottom_right) {
       free_channels(this);
       config_channels(this);
     }
