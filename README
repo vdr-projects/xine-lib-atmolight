@@ -15,11 +15,11 @@ The "atmo" post plugin analyze the video picture and generates
 output data for so called "atmolight" controllers.
 
 For detailed informations about "atmolight" visit the VDR-Wiki:
-http://www.vdr-wiki.de/wiki/index.php/Atmo-plugin
-http://www.vdr-wiki.de/wiki/index.php/DF10CH
+	http://www.vdr-wiki.de/wiki/index.php/Atmo-plugin
+	http://www.vdr-wiki.de/wiki/index.php/DF10CH
 
 This project is hosted at:
-http://projects.vdr-developer.org/projects/show/xine-lib-atmolight
+	http://projects.vdr-developer.org/projects/show/xine-lib-atmolight
 
 !!!NOTE!!!!
 Currently this plugin supports only grabbing of video from VDPAU
@@ -29,9 +29,12 @@ enabled devices!
 Requirements:
 -------------
 
-xine-lib-vdpau or xine-lib-1.2 with vdpau support
-Both version must have the vdpau extension patches version v15 or greater from here:
-http://www.vdr-portal.de/board/thread.php?threadid=86804
+Actual xine-lib-1.2 release:
+	http://hg.debian.org/hg/xine-lib/xine-lib-1.2
+
+The xine-lib-1.2 library must have the vdpau extension patches
+version v15 or greater applied from here:
+	http://www.vdr-portal.de/board/thread.php?threadid=86804
 
 For compiling the plugin the xine-lib and libusb-1.0 development
 files have to be installed. On debian based systems these are
@@ -65,10 +68,10 @@ The plugin stores the actual parameter setting in the xinelib config file
 under the key 'post.atmo.parameters'.
 Plugin parameters specified at the command line are mandatory and always
 override the parameters stored in the xinelib config file at startup time.
-You should specify all 'static' parameters like output driver or section layout
+You should specify all static parameters like output driver or section layout
 at the command line.
 Parameters that you wish to trim while player is running should not be specified within the
-command line. Player's like xine-ui have GUI support for changing plugin parameters
+command line. Players like xine-ui have GUI support for changing plugin parameters
 (press <alt><shift>p to show the post processing panel). 
 Changes of Parameters marked with * will be immediately applied while player is running.
 The other parameters will be applied after a stream close/open sequence (this happens already
@@ -78,20 +81,20 @@ Parameter          Default          Description
 
 driver             none             Selects output driver. Currently supported are:
 
-                                    file     Write output data to file. Usefull for 
-                                             testing and debuging.
+                                    file     Write output data to file. Useful for 
+                                             testing and debugging.
                                            
                                     classic  Send output data to serial port. Used
-                                             Protokoll is for "classic" Atmolight
+                                             Protocol is for "classic" Atmolight
                                              2 channel controller. See:
                                              http://www.vdr-wiki.de/wiki/index.php/Atmo-plugin
                                              
                                     df4ch    Send output data to serial port. Used
-                                             Protokoll is for my own designed 4 channel
+                                             Protocol is for my own designed 4 channel
                                              controller.
                                              
                                     df10ch	 Send output data via libusb to my own designed 
-                                             DF10CH 10ch Controller(s).
+                                             DF10CH 10 channel Controller(s).
 
 driver_param                        Parameter for output driver:
 
@@ -119,11 +122,9 @@ center
 top_left
 top_right
 bottom_left
-bottom_right       0                Number of RGB channel groups per Area.
+bottom_right       0                Number of RGB channel groups per area.
                                     For top, bottom, left and right area more then one group could be
-                                    specified. This will be usefull when "next generation" controllers
-                                    like DF10CH are available. See the "aurora" project at:
-                                    http://www.vdr-portal.de/board/thread.php?threadid=71741&hilight=aurora
+                                    specified.
                                     Valid values: 0 ... 25 for top, bottom, left, right
                                     Valid values: 0 ... 1 for center, top_left, top_right, bottom_left, bottom_right
 
@@ -139,7 +140,7 @@ analyze_rate *     40               Rate of frame grabbing and video analysis. U
                                     Valid values: 10 ... 500
 
 analyze_size *     1                Size of analyze window. The window width is calculated by (analyze_size+1)*64 pixel.
-                                    The window height is calcuated aspect correct according to the grabbed video
+                                    The window height is calculated aspect correct according to the grabbed video
                                     window size. So a analyze size of 1 for a 16:9 video will give us a 128x72 pixel
                                     analyze window.
                                     Valid values: 0 ... 3
@@ -164,7 +165,7 @@ edge_weighting *   60               Power of edge weighting.
                                     from the controller configuration data. Use the DF10CH setup program to configure your
                                     desired edge weighting.
 
-darkness_limit *   1                Minimum brightness of pixel. Value's below are interpreted as black pixel.
+darkness_limit *   1                Minimum brightness of pixel. Values below are interpreted as black pixel.
                                     Used to detect and skip "black borders" in video.
                                     Valid values are 0 ... 100
 
@@ -175,7 +176,7 @@ sat_win_size *     3                Windowing size for saturation. Valid values 
 hue_treshold	*		 93								Threshold limit for change of color.
 																		Unit percentage of 100. Valid values 1 ... 100
 																		 
-filter *           combined         Select's smoothness filter. Currently there are two filters
+filter *           combined         Select smoothness filter. Currently there are two filters
                                     supported: percentage and combined.
                                     Valid values: off, percentage, combined
 
@@ -213,8 +214,8 @@ gamma *            0                Gamma correction factor for red, green and b
                                     Valid values 0 ... 50. 0 means no gamma correction
                                     
                                     Note: When using DF10CH controller(s) it is better to use the gamma calibration 
-                                    feature of the DF10CH setup program instead of this parameter because you will
-                                    lose no PWM resolution.
+                                    feature of the DF10CH setup program instead of this parameter because you will not
+                                    lose PWM resolution.
 
 start_delay *      250              Delay after stream start before first output is send [ms].
                                     Valid values 0 ... 5000.
@@ -222,9 +223,12 @@ start_delay *      250              Delay after stream start before first output
 enabled *          1                Enable/Disable output of color values to atmolight controller.
 
 
+For some parameters (e.g. filter parameters) you will find a more detailed description here:
+	http://www.vdr-wiki.de/wiki/index.php/Atmo-plugin
 
-Additional patches located in subdirectory 'patches':
------------------------------------------------------
+
+Additional patches located in sub directory 'patches':
+------------------------------------------------------
 
 xine-ui-atmolight-switch.patch
 
@@ -237,8 +241,8 @@ xineliboutput-atmolight-switch.patch
 
 This is a patch for the xineliboutput player that extends the player with a 'Atmolight' command
 to switch the Atmolight on/off.
-Send remote command "Atmolight" for toggling on/off, "Atmolight 0" for switching off or "Atmolight 1"
+Send slave command "Atmolight" for toggling on/off, "Atmolight 0" for switching off or "Atmolight 1"
 for switching on.
-Also pressing keyboard key 'a' or sending LIRC command 'Atmolight' toggels the Atmolight.
+Also pressing keyboard key 'a' or sending LIRC command 'Atmolight' toggles the Atmolight.
 
 
