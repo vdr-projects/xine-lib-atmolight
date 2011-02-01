@@ -90,6 +90,7 @@ typedef struct {
   int hue_win_size;
   int sat_win_size;
   int hue_threshold;
+  int uniform_brightness;
   int brightness;
   int filter;
   int filter_smoothness;
@@ -154,6 +155,8 @@ PARAM_ITEM(POST_PARAM_TYPE_INT, hue_threshold, NULL, 0, 100, 0,
   "hue threshold [%]")
 PARAM_ITEM(POST_PARAM_TYPE_INT, brightness, NULL, 50, 300, 0,
   "brightness [%]")
+PARAM_ITEM(POST_PARAM_TYPE_BOOL, uniform_brightness, NULL, 0, 1, 0,
+    "calculate uniform brightness")
 PARAM_ITEM(POST_PARAM_TYPE_INT, filter, filter_enum, 0, NUM_FILTERS, 0,
   "filter mode")
 PARAM_ITEM(POST_PARAM_TYPE_INT, filter_smoothness, NULL, 1, 100, 0,
@@ -275,7 +278,7 @@ static int parse_post_api_parameter_string(xine_post_api_descr_t *descr, void *v
   while (p->type != POST_PARAM_TYPE_LAST) {
     if (!p->readonly) {
       char *arg = strstr(param, p->name);
-      if (arg && arg[strlen(p->name)] == '=') {
+      if (arg && arg[strlen(p->name)] == '=' && (arg == param || arg[-1] == ',' || isspace(arg[-1]))) {
         arg += strlen(p->name) + 1;
         char *v = (char *)values + p->offset;
         int iv;
@@ -659,6 +662,36 @@ static void calc_average_brightness(atmo_post_plugin_t *this, hsv_color_t *hsv, 
 }
 
 
+static void calc_uniform_average_brightness(atmo_post_plugin_t *this, hsv_color_t *hsv, int img_size) {
+  const int darkness_limit = this->active_parm.darkness_limit;
+  uint64_t avg = 0;
+  int cnt = 0;
+
+  while (img_size--) {
+    const int v = hsv->v;
+    if (v >= darkness_limit) {
+      avg += v;
+      ++cnt;
+    }
+    ++hsv;
+  }
+
+  if (cnt)
+    avg /= cnt;
+  else
+    avg = darkness_limit;
+
+  avg = (avg * this->active_parm.brightness) / 100;
+  if (avg > v_MAX)
+    avg = v_MAX;
+
+  uint64_t * const avg_bright = this->avg_bright;
+  int c = this->sum_channels;
+  while (c)
+    avg_bright[--c] = avg;
+}
+
+
 static void hsv_to_rgb(rgb_color_t *rgb, double h, double s, double v) {
   rgb->r = rgb->g = rgb->b = 0;
 
@@ -833,7 +866,10 @@ static void *atmo_grab_loop (void *this_gen) {
           calc_sat_hist(this, hsv_img, weight, img_size);
           calc_windowed_sat_hist(this);
           calc_most_used_sat(this);
-          calc_average_brightness(this, hsv_img, weight, img_size);
+          if (this->active_parm.uniform_brightness)
+            calc_uniform_average_brightness(this, hsv_img, img_size);
+          else
+            calc_average_brightness(this, hsv_img, weight, img_size);
           pthread_mutex_lock(&this->lock);
           calc_rgb_values(this);
           pthread_mutex_unlock(&this->lock);
@@ -1404,6 +1440,7 @@ static int atmo_set_parameters(xine_post_t *this_gen, void *parm_gen)
         else {
           this->active_parm.analyze_rate = this->parm.analyze_rate;
           this->active_parm.brightness = this->parm.brightness;
+          this->active_parm.uniform_brightness = this->parm.uniform_brightness;
           this->active_parm.darkness_limit = this->parm.darkness_limit;
           this->active_parm.filter = this->parm.filter;
           this->active_parm.filter_length = this->parm.filter_length;
@@ -1523,6 +1560,7 @@ static post_plugin_t *atmo_open_plugin(post_class_t *class_gen,
   this->parm.analyze_rate = 35;
   this->parm.analyze_size = 1;
   this->parm.brightness = 100;
+  this->parm.uniform_brightness = 0;
   this->parm.darkness_limit = 1;
   this->parm.edge_weighting = 60;
   this->parm.filter = 2;

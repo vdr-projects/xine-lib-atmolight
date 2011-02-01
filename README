@@ -122,21 +122,21 @@ center
 top_left
 top_right
 bottom_left
-bottom_right       0                Number of RGB channel groups per area.
-                                    For top, bottom, left and right area more then one group could be
+bottom_right       0                Number of sections (RGB channel groups) in area.
+                                    For top, bottom, left and right area more then one section could be
                                     specified.
                                     Valid values: 0 ... 25 for top, bottom, left, right
                                     Valid values: 0 ... 1 for center, top_left, top_right, bottom_left, bottom_right
 
                                     NOTE!!!: Starting from plugin version 0.3 for "classic" controllers you must define one
-                                    group for area top, bottom, left, right and center as plugin parameter!!!
+                                    section for area top, bottom, left, right and center as plugin parameter!!!
                                     
                                     For DF10CH controller you do not have to specify these parameters here because they are read
                                     from the controller configuration data. Use the DF10CH setup program to configure your
                                     desired layout.
                                     
                                     
-analyze_rate *     40               Rate of frame grabbing and video analysis. Unit milliseconds.
+analyze_rate *     35               Rate of frame grabbing and video analysis. Unit milliseconds.
                                     Valid values: 10 ... 500
 
 analyze_size *     1                Size of analyze window. The window width is calculated by (analyze_size+1)*64 pixel.
@@ -176,6 +176,21 @@ sat_win_size *     3                Windowing size for saturation. Valid values 
 hue_treshold	*		 93								Threshold limit for change of color.
 																		Unit percentage of 100. Valid values 1 ... 100
 																		 
+brightness	*      100              Controls brightness of generated color values.
+                                    Unit percentage of 100. Valid values 50 ... 300
+                                    
+                                    Note: When using DF10CH controller(s) it is better to use the white calibration or
+                                    common brightness feature of the DF10CH setup program instead of this
+                                    parameter because you will lose lesser or no PWM resolution.
+
+uniform_brightness * 0              Enable/Disable uniform brightness calculation.
+                                    Valid values: 0 (disable), 1 (enable)
+                                    When enabled only one uniform average brightness value is calculated
+                                    for all sections. This is the behavior of the "classic"
+                                    VDR Atmolight plugin.
+                                    When disabled a average brightness value is calculated for each
+                                    section. This mode is more suitable when many sections for a area exists.   
+                                    
 filter *           combined         Select smoothness filter. Currently there are two filters
                                     supported: percentage and combined.
                                     Valid values: off, percentage, combined
@@ -193,13 +208,6 @@ filter_delay *     0                Controls delay of output send to controller.
                                     Unit milliseconds. Valid values 0 ... 1000
                                     Note: Delay should be specified as multiples of 20ms
                                                                         
-brightness	*      100              Controls brightness of generated color values.
-                                    Unit percentage of 100. Valid values 50 ... 300
-                                    
-                                    Note: When using DF10CH controller(s) it is better to use the white calibration or
-                                    common brightness feature of the DF10CH setup program instead of this
-                                    parameter because you will lose lesser or no PWM resolution.
-
 wc_red
 wc_green
 wc_blue *          255              White calibration values for red, green and blue channel.
@@ -221,6 +229,8 @@ start_delay *      250              Delay after stream start before first output
                                     Valid values 0 ... 5000.
 
 enabled *          1                Enable/Disable output of color values to atmolight controller.
+                                    Valid values: 0 (disable), 1 (enable)
+        
 
 
 For some parameters (e.g. filter parameters) you will find a more detailed description here:
