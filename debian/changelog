@@ -1,3 +1,9 @@
+libxine-atmo-plugin (0.8-0) lucid; urgency=low
+
+  * New upstream release
+
+ -- Andreas Auras <yak54@gmx.net>  Sun, 27 Feb 2011 15:28:23 +0100
+
 libxine-atmo-plugin (0.7-0) lucid; urgency=low
 
   * New upstream release
