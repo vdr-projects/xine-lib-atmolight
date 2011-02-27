@@ -790,7 +790,10 @@ static void *atmo_grab_loop (void *this_gen) {
       /* allocate grab frame */
     if (!frame) {
 #ifdef HAVE_XINE_VO_GRAB_FRAME
-      frame = video_port->new_grab_frame(video_port);
+      if (video_port->driver->new_grab_frame)
+        frame = video_port->driver->new_grab_frame(video_port->driver);
+      else
+        frame = video_port->new_grab_frame(video_port);
       if (!frame) {
 #else
       if (xine_port_send_gui_data(video_port, XINE_GUI_SEND_ALLOC_GRAB_FRAME, &frame)) {
@@ -843,12 +846,13 @@ static void *atmo_grab_loop (void *this_gen) {
 
         /* grab displayed video frame */
       frame->timeout = GRAB_TIMEOUT;
-      frame->continuous = 1;
       frame->width = analyze_width;
       frame->height = analyze_height;
 #ifdef HAVE_XINE_VO_GRAB_FRAME
-      if (!(rc = frame->grab_next_displayed_frame(frame))) {
+      frame->flags = VO_GRAB_FRAME_FLAGS_CONTINUOUS | VO_GRAB_FRAME_FLAGS_WAIT_NEXT;
+      if (!(rc = frame->grab(frame))) {
 #else
+      frame->continuous = 1;
       if (!(rc = xine_port_send_gui_data(video_port, XINE_GUI_SEND_GRAB_FRAME, frame))) {
 #endif
         if (frame->width == analyze_width && frame->height == analyze_height) {

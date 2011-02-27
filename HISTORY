@@ -1,3 +1,6 @@
+--- Version 0.8
+Added support for df-xine-lib-extensions patch
+
 --- Version 0.7
 Added output delay filter which is configurable with new plugin parameter 'filter_delay'.
 Added uniform average brightness calculation mode which is configurable with new plugin parameter 'uniform_brightness'.
