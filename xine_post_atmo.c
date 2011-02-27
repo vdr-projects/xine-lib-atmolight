@@ -758,7 +758,11 @@ static void *atmo_grab_loop (void *this_gen) {
   post_video_port_t *port = this->port;
   xine_video_port_t *video_port = port->original_port;
   xine_ticket_t *ticket = this->post_plugin.running_ticket;
+#ifdef HAVE_XINE_VO_GRAB_FRAME
+  vo_grab_frame_t *frame = NULL;
+#else
   xine_grab_frame_t *frame = NULL;
+#endif
   int rc;
   int grab_width, grab_height, analyze_width, analyze_height, overscan, img_size;
   int last_analyze_width = 0, last_analyze_height = 0;
@@ -784,15 +788,26 @@ static void *atmo_grab_loop (void *this_gen) {
   while (running) {
 
       /* allocate grab frame */
-    if (!frame && xine_port_send_gui_data(video_port, XINE_GUI_SEND_ALLOC_GRAB_FRAME, &frame)) {
-      xine_log(this->post_plugin.xine, XINE_LOG_PLUGIN, "atmo: frame grabbing not supported by this video driver!\n");
-      break;
+    if (!frame) {
+#ifdef HAVE_XINE_VO_GRAB_FRAME
+      frame = video_port->new_grab_frame(video_port);
+      if (!frame) {
+#else
+      if (xine_port_send_gui_data(video_port, XINE_GUI_SEND_ALLOC_GRAB_FRAME, &frame)) {
+#endif
+        xine_log(this->post_plugin.xine, XINE_LOG_PLUGIN, "atmo: frame grabbing not supported!\n");
+        break;
+      }
     }
 
     if (ticket->ticket_revoked) {
         /* free grab frame */
       if (frame) {
+#ifdef HAVE_XINE_VO_GRAB_FRAME
+        frame->dispose(frame);
+#else
         xine_port_send_gui_data(video_port, XINE_GUI_SEND_FREE_GRAB_FRAME, frame);
+#endif
         frame = NULL;
       }
       llprintf(LOG_1, "grab thread waiting for new ticket\n");
@@ -831,7 +846,11 @@ static void *atmo_grab_loop (void *this_gen) {
       frame->continuous = 1;
       frame->width = analyze_width;
       frame->height = analyze_height;
+#ifdef HAVE_XINE_VO_GRAB_FRAME
+      if (!(rc = frame->grab_next_displayed_frame(frame))) {
+#else
       if (!(rc = xine_port_send_gui_data(video_port, XINE_GUI_SEND_GRAB_FRAME, frame))) {
+#endif
         if (frame->width == analyze_width && frame->height == analyze_height) {
           img_size = analyze_width * analyze_height;
 
@@ -912,8 +931,13 @@ static void *atmo_grab_loop (void *this_gen) {
   }
 
     /* free grab frame */
-  if (frame)
+  if (frame) {
+#ifdef HAVE_XINE_VO_GRAB_FRAME
+    frame->dispose(frame);
+#else
     xine_port_send_gui_data(video_port, XINE_GUI_SEND_FREE_GRAB_FRAME, frame);
+#endif
+  }
 
   ticket->release(ticket, 0);
 

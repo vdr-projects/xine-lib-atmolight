@@ -15,11 +15,11 @@
 </extensions>
 </storageModule>
 <storageModule moduleId="cdtBuildSystem" version="4.0.0">
-<configuration artifactName="atmo" buildProperties="" id="cdt.managedbuild.toolchain.gnu.base.522923725" name="Linux GCC" parent="org.eclipse.cdt.build.core.emptycfg">
+<configuration artifactName="atmo" buildProperties="" description="" id="cdt.managedbuild.toolchain.gnu.base.522923725" name="Linux GCC" parent="org.eclipse.cdt.build.core.emptycfg">
 <folderInfo id="cdt.managedbuild.toolchain.gnu.base.522923725.1299807297" name="/" resourcePath="">
 <toolChain id="cdt.managedbuild.toolchain.gnu.base.1765852131" name="cdt.managedbuild.toolchain.gnu.base" superClass="cdt.managedbuild.toolchain.gnu.base">
 <targetPlatform archList="all" binaryParser="org.eclipse.cdt.core.ELF" id="cdt.managedbuild.target.gnu.platform.base.1949347644" name="Debug Platform" osList="linux,hpux,aix,qnx" superClass="cdt.managedbuild.target.gnu.platform.base"/>
-<builder id="cdt.managedbuild.target.gnu.builder.base.1108692234" managedBuildOn="false" name="Gnu Make Builder.Linux GCC" superClass="cdt.managedbuild.target.gnu.builder.base"/>
+<builder id="cdt.managedbuild.target.gnu.builder.base.1108692234" incrementalBuildTarget="install" keepEnvironmentInBuildfile="false" managedBuildOn="false" name="Gnu Make Builder" superClass="cdt.managedbuild.target.gnu.builder.base"/>
 <tool id="cdt.managedbuild.tool.gnu.archiver.base.1982832721" name="GCC Archiver" superClass="cdt.managedbuild.tool.gnu.archiver.base"/>
 <tool id="cdt.managedbuild.tool.gnu.cpp.compiler.base.2064905689" name="GCC C++ Compiler" superClass="cdt.managedbuild.tool.gnu.cpp.compiler.base"/>
 <tool id="cdt.managedbuild.tool.gnu.c.compiler.base.1226506188" name="GCC C Compiler" superClass="cdt.managedbuild.tool.gnu.c.compiler.base">
@@ -136,6 +136,7 @@
 </target>
 </buildTargets>
 </storageModule>
+<storageModule moduleId="org.eclipse.cdt.core.language.mapping"/>
 </cconfiguration>
 </storageModule>
 <storageModule moduleId="cdtBuildSystem" version="4.0.0">
