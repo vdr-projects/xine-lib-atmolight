@@ -21,10 +21,6 @@ For detailed informations about "atmolight" visit the VDR-Wiki:
 This project is hosted at:
 	http://projects.vdr-developer.org/projects/show/xine-lib-atmolight
 
-!!!NOTE!!!!
-Currently this plugin supports only grabbing of video from VDPAU
-enabled devices!
-
 
 Requirements:
 -------------
@@ -32,9 +28,9 @@ Requirements:
 Actual xine-lib-1.2 release:
 	http://hg.debian.org/hg/xine-lib/xine-lib-1.2
 
-The xine-lib-1.2 library must have the vdpau extension patches
-version v15 or greater applied from here:
-	http://www.vdr-portal.de/board/thread.php?threadid=86804
+The xine-lib-1.2 library must have the df-xine-lib-extensions patch
+applied from here:
+	http://projects.vdr-developer.org/projects/xine-lib/files
 
 For compiling the plugin the xine-lib and libusb-1.0 development
 files have to be installed. On debian based systems these are
@@ -156,6 +152,9 @@ overscan *         30               Ignored overscan border of grabbed video fra
                                     For DF10CH controller you do not have to specify this parameter here because it is read
                                     from the controller configuration data. Use the DF10CH setup program to configure your
                                     desired overscan.
+                                    
+                                    Note: Because of restrictions of the implementation of the df-xine-lib-extensions patch
+                                    this parameter is only supported when using the VDPAU output driver.
                                     
 edge_weighting *   60               Power of edge weighting.
 																		Value is divided by 10 e.g. 80 -> power of 8
