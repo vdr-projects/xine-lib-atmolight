@@ -1417,6 +1417,7 @@ static void atmo_video_open(xine_video_port_t *port_gen, xine_stream_t *stream) 
   _x_post_inc_usage(port);
 
   pthread_mutex_lock(&this->port_lock);
+  stop_threads(this, 1);
   (port->original_port->open) (port->original_port, stream);
   port->stream = stream;
   this->port = port;
