@@ -204,7 +204,7 @@ typedef struct atmo_post_plugin_s
   int *grab_running, *output_running;
   pthread_t grab_thread, output_thread;
   pthread_mutex_t lock;
-  pthread_cond_t thread_started;
+  pthread_cond_t thread_started, thread_stopped;
 
     /* output related */
   output_driver_t *output_driver;
@@ -949,8 +949,8 @@ static void *atmo_grab_loop (void *this_gen) {
   free(weight);
 
   pthread_mutex_lock(&this->lock);
-  if (running)
-    this->grab_running = NULL;
+  this->grab_running = NULL;
+  pthread_cond_broadcast(&this->thread_stopped);
   pthread_mutex_unlock(&this->lock);
 
   _x_post_dec_usage(port);
@@ -1207,8 +1207,8 @@ static void *atmo_output_loop (void *this_gen) {
   ticket->release(ticket, 0);
 
   pthread_mutex_lock(&this->lock);
-  if (running)
-    this->output_running = NULL;
+  this->output_running = NULL;
+  pthread_cond_broadcast(&this->thread_stopped);
   pthread_mutex_unlock(&this->lock);
 
   _x_post_dec_usage(port);
@@ -1306,23 +1306,36 @@ static void start_threads(atmo_post_plugin_t *this) {
 }
 
 
-static void stop_threads(atmo_post_plugin_t *this, int wait) {
-  int do_wait = 0;
-
+static void stop_threads(atmo_post_plugin_t *this) {
   pthread_mutex_lock(&this->lock);
-  if (this->grab_running) {
+  if (this->grab_running)
     *this->grab_running = 0;
-    this->grab_running = NULL;
-    do_wait = wait;
-  }
-  if (this->output_running) {
+  if (this->output_running)
     *this->output_running = 0;
-    this->output_running = NULL;
-    do_wait = wait;
+  if (this->grab_running || this->output_running) {
+    struct timeval tvnow, tvdiff, tvtimeout;
+    struct timespec ts;
+
+    /* calculate absolute timeout time */
+    tvdiff.tv_sec = THREAD_TERMINATION_WAIT_TIME / 1000;
+    tvdiff.tv_usec = THREAD_TERMINATION_WAIT_TIME % 1000;
+    tvdiff.tv_usec *= 1000;
+    gettimeofday(&tvnow, NULL);
+    timeradd(&tvnow, &tvdiff, &tvtimeout);
+    ts.tv_sec  = tvtimeout.tv_sec;
+    ts.tv_nsec = tvtimeout.tv_usec;
+    ts.tv_nsec *= 1000;
+
+    while (this->grab_running || this->output_running) {
+      if (pthread_cond_timedwait(&this->thread_stopped, &this->lock, &ts) == ETIMEDOUT) {
+        llprintf(LOG_1, "timeout while waiting for thread stop!\n");
+        break;
+      }
+    }
   }
+  this->grab_running = NULL;
+  this->output_running = NULL;
   pthread_mutex_unlock(&this->lock);
-  if (do_wait)
-    usleep(THREAD_TERMINATION_WAIT_TIME*1000);
 }
 
 
@@ -1430,7 +1443,7 @@ static void atmo_video_close(xine_video_port_t *port_gen, xine_stream_t *stream)
   atmo_post_plugin_t *this = (atmo_post_plugin_t *) port->post;
 
   pthread_mutex_lock(&this->port_lock);
-  stop_threads(this, 1);
+  stop_threads(this);
   this->port = NULL;
   port->original_port->close(port->original_port, stream);
   port->stream = NULL;
@@ -1485,7 +1498,7 @@ static int atmo_set_parameters(xine_post_t *this_gen, void *parm_gen)
         }
       } else {
         if (this->active_parm.enabled) {
-          stop_threads(this, 1);
+          stop_threads(this);
           close_output_driver(this);
         }
       }
@@ -1530,6 +1543,7 @@ static void atmo_dispose(post_plugin_t *this_gen)
     pthread_mutex_destroy(&this->lock);
     pthread_mutex_destroy(&this->port_lock);
     pthread_cond_destroy(&this->thread_started);
+    pthread_cond_destroy(&this->thread_stopped);
     free(this);
   }
 }
@@ -1581,6 +1595,7 @@ static post_plugin_t *atmo_open_plugin(post_class_t *class_gen,
   pthread_mutex_init(&this->lock, NULL);
   pthread_mutex_init(&this->port_lock, NULL);
   pthread_cond_init(&this->thread_started, NULL);
+  pthread_cond_init(&this->thread_stopped, NULL);
 
     /* Set default values for parameters */
   this->parm.enabled = 1;
