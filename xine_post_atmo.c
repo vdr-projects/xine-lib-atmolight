@@ -1289,14 +1289,14 @@ static void start_threads(atmo_post_plugin_t *this) {
   pthread_mutex_lock(&this->lock);
   if (this->grab_running == NULL) {
     if ((err = pthread_create (&this->grab_thread, &pth_attrs, atmo_grab_loop, this)))
-      xprintf(this->post_plugin.xine, XINE_VERBOSITY_LOG, "atmo: can't create grab thread (%s)\n", strerror(err));
+      xine_log(this->post_plugin.xine, XINE_LOG_PLUGIN, "atmo: can't create grab thread (%s)\n", strerror(err));
     else
       pthread_cond_wait(&this->thread_started, &this->lock);
   }
 
   if (this->output_running == NULL) {
     if ((err = pthread_create (&this->output_thread, &pth_attrs, atmo_output_loop, this)))
-      xprintf(this->post_plugin.xine, XINE_VERBOSITY_LOG, "atmo: can't create output thread (%s)\n", strerror(err));
+      xine_log(this->post_plugin.xine, XINE_LOG_PLUGIN, "atmo: can't create output thread (%s)\n", strerror(err));
     else
       pthread_cond_wait(&this->thread_started, &this->lock);
   }
@@ -1328,7 +1328,7 @@ static void stop_threads(atmo_post_plugin_t *this) {
 
     while (this->grab_running || this->output_running) {
       if (pthread_cond_timedwait(&this->thread_stopped, &this->lock, &ts) == ETIMEDOUT) {
-        llprintf(LOG_1, "timeout while waiting for thread stop!\n");
+        xine_log(this->post_plugin.xine, XINE_LOG_PLUGIN, "atmo: timeout while waiting for thread stop!\n");
         break;
       }
     }
