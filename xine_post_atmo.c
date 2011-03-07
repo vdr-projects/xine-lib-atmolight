@@ -44,11 +44,11 @@ extern long int lround(double); /* Missing in math.h? */
 #define LOG_2           0
 
 
-#define OUTPUT_RATE                     20     /* rate of output loop [ms] */
-#define GRAB_TIMEOUT                   100     /* max. time waiting for next grab image [ms] */
-#define THREAD_TERMINATION_WAIT_TIME   150     /* time waiting for thread termination [ms] */
+#define OUTPUT_RATE             20      /* rate of output loop [ms] */
+#define GRAB_TIMEOUT            100     /* max. time waiting for next grab image [ms] */
+#define THREAD_RESPONSE_TIMEOUT 500000  /* timeout for thread state change [us] */
 
-#define NUM_AREAS                       9      /* Number of different areas (top, bottom ...) */
+#define NUM_AREAS               9       /* Number of different areas (top, bottom ...) */
 
 /* accuracy of color calculation */
 #define h_MAX   255
@@ -185,6 +185,7 @@ typedef struct {
   xine_t *xine;
 } atmo_post_class_t;
 
+enum { TS_STOP, TS_RUNNING, TS_SUSPEND, TS_SUSPENDED, TS_TICKET_REVOKED };
 
 typedef struct atmo_post_plugin_s
 {
@@ -201,10 +202,10 @@ typedef struct atmo_post_plugin_s
   int sum_channels;
 
   /* thread related */
-  int *grab_running, *output_running;
+  int *grab_thread_state, *output_thread_state;
   pthread_t grab_thread, output_thread;
   pthread_mutex_t lock;
-  pthread_cond_t thread_started, thread_stopped;
+  pthread_cond_t thread_state_change;
 
     /* output related */
   output_driver_t *output_driver;
@@ -755,9 +756,9 @@ static void calc_rgb_values(atmo_post_plugin_t *this)
 
 static void *atmo_grab_loop (void *this_gen) {
   atmo_post_plugin_t *this = (atmo_post_plugin_t *) this_gen;
-  post_video_port_t *port = this->port;
-  xine_video_port_t *video_port = port->original_port;
   xine_ticket_t *ticket = this->post_plugin.running_ticket;
+  post_video_port_t *port = NULL;
+  xine_video_port_t *video_port = NULL;
 #ifdef HAVE_XINE_VO_GRAB_FRAME
   vo_grab_frame_t *frame = NULL;
 #else
@@ -768,24 +769,95 @@ static void *atmo_grab_loop (void *this_gen) {
   int last_analyze_width = 0, last_analyze_height = 0;
   int alloc_img_size = 0;
   int edge_weighting = 0;
-  int running = 1;
   hsv_color_t *hsv_img = NULL;
   uint8_t *weight = NULL;
-  struct timeval tvnow, tvlast, tvdiff;
-  useconds_t analyze_rate;
-
-  _x_post_inc_usage(port);
+  struct timeval tvnow, tvlast, tvdiff, tvtimeout;
+  struct timespec ts;
+  int thread_state = TS_RUNNING;
 
   pthread_mutex_lock(&this->lock);
-  this->grab_running = &running;
-  pthread_cond_broadcast(&this->thread_started);
+  this->grab_thread_state = &thread_state;
+  pthread_cond_broadcast(&this->thread_state_change);
   pthread_mutex_unlock(&this->lock);
 
   llprintf(LOG_1, "grab thread running\n");
 
   ticket->acquire(ticket, 0);
 
-  while (running) {
+  pthread_mutex_lock(&this->lock);
+
+  gettimeofday(&tvlast, NULL);
+
+  for (;;) {
+
+      /* loop with analyze rate duration */
+    tvdiff.tv_sec = 0;
+    tvdiff.tv_usec = this->active_parm.analyze_rate * 1000;
+    timeradd(&tvlast, &tvdiff, &tvtimeout);
+    gettimeofday(&tvnow, NULL);
+    if (timercmp(&tvtimeout, &tvnow, >)) {
+      ts.tv_sec  = tvtimeout.tv_sec;
+      ts.tv_nsec = tvtimeout.tv_usec;
+      ts.tv_nsec *= 1000;
+      pthread_cond_timedwait(&this->thread_state_change, &this->lock, &ts);
+      gettimeofday(&tvnow, NULL);
+    }
+    tvlast = tvnow;
+
+    if (thread_state == TS_STOP)
+      break;
+
+    if (ticket->ticket_revoked || thread_state == TS_SUSPEND) {
+        /* free grab frame */
+      if (frame) {
+#ifdef HAVE_XINE_VO_GRAB_FRAME
+        frame->dispose(frame);
+#else
+        xine_port_send_gui_data(video_port, XINE_GUI_SEND_FREE_GRAB_FRAME, frame);
+#endif
+        frame = NULL;
+      }
+
+      if (ticket->ticket_revoked) {
+        llprintf(LOG_1, "grab thread waiting for new ticket\n");
+
+        thread_state = TS_TICKET_REVOKED;
+        pthread_cond_broadcast(&this->thread_state_change);
+        pthread_mutex_unlock(&this->lock);
+
+        ticket->renew(ticket, 0);
+
+        pthread_mutex_lock(&this->lock);
+        if (thread_state == TS_STOP)
+          break;
+
+        thread_state = TS_RUNNING;
+        pthread_cond_broadcast(&this->thread_state_change);
+
+        llprintf(LOG_1, "grab thread got new ticket (revoke=%d)\n", ticket->ticket_revoked);
+
+        gettimeofday(&tvlast, NULL);
+        continue;
+      }
+
+      thread_state = TS_SUSPENDED;
+      pthread_cond_broadcast(&this->thread_state_change);
+
+      llprintf(LOG_1, "grab thread suspended\n");
+    }
+
+    if (thread_state == TS_SUSPENDED || !this->port)
+      continue;
+
+    if (port && port != this->port) {
+      _x_post_dec_usage(port);
+      port = NULL;
+    }
+    if (!port) {
+      port = this->port;
+      video_port = port->original_port;
+      _x_post_inc_usage(port);
+    }
 
       /* allocate grab frame */
     if (!frame) {
@@ -801,25 +873,11 @@ static void *atmo_grab_loop (void *this_gen) {
         xine_log(this->post_plugin.xine, XINE_LOG_PLUGIN, "atmo: frame grabbing not supported!\n");
         break;
       }
+
+      llprintf(LOG_1, "grab thread resumed\n");
     }
 
-    if (ticket->ticket_revoked) {
-        /* free grab frame */
-      if (frame) {
-#ifdef HAVE_XINE_VO_GRAB_FRAME
-        frame->dispose(frame);
-#else
-        xine_port_send_gui_data(video_port, XINE_GUI_SEND_FREE_GRAB_FRAME, frame);
-#endif
-        frame = NULL;
-      }
-      llprintf(LOG_1, "grab thread waiting for new ticket\n");
-      ticket->renew(ticket, 0);
-      llprintf(LOG_1, "grab thread got new ticket\n");
-      continue;
-    }
-
-    gettimeofday(&tvlast, NULL);
+    pthread_mutex_unlock(&this->lock);
 
       /* get actual displayed image size */
     grab_width = video_port->get_property(video_port, VO_PROP_WINDOW_WIDTH);
@@ -865,8 +923,10 @@ static void *atmo_grab_loop (void *this_gen) {
             alloc_img_size = img_size;
             hsv_img = (hsv_color_t *) malloc(img_size * sizeof(hsv_color_t));
             weight = (uint8_t *) malloc(img_size * this->sum_channels * sizeof(uint8_t));
-            if (!hsv_img || !weight)
+            if (!hsv_img || !weight) {
+              pthread_mutex_lock(&this->lock);
               break;
+            }
             last_analyze_width = 0;
             last_analyze_height = 0;
             edge_weighting = 0;
@@ -895,9 +955,8 @@ static void *atmo_grab_loop (void *this_gen) {
             calc_average_brightness(this, hsv_img, weight, img_size);
           pthread_mutex_lock(&this->lock);
           calc_rgb_values(this);
-          pthread_mutex_unlock(&this->lock);
-
           llprintf(LOG_2, "grab %ld.%03ld: vpts=%ld\n", tvlast.tv_sec, tvlast.tv_usec / 1000, frame->vpts);
+          continue;
         }
       } else {
         if (rc < 0)
@@ -907,12 +966,7 @@ static void *atmo_grab_loop (void *this_gen) {
       }
     }
 
-      /* loop with analyze rate duration */
-    analyze_rate = this->active_parm.analyze_rate * 1000;
-    gettimeofday(&tvnow, NULL);
-    timersub(&tvnow, &tvlast, &tvdiff);
-    if (tvdiff.tv_sec == 0 && tvdiff.tv_usec < analyze_rate)
-      usleep(analyze_rate - tvdiff.tv_usec);
+    pthread_mutex_lock(&this->lock);
 
 #if 0
     {
@@ -934,6 +988,8 @@ static void *atmo_grab_loop (void *this_gen) {
 #endif
   }
 
+  llprintf(LOG_1, "grab thread terminating\n");
+
     /* free grab frame */
   if (frame) {
 #ifdef HAVE_XINE_VO_GRAB_FRAME
@@ -943,19 +999,21 @@ static void *atmo_grab_loop (void *this_gen) {
 #endif
   }
 
-  ticket->release(ticket, 0);
+  if (this->grab_thread_state == &thread_state)
+    this->grab_thread_state = NULL;
+  pthread_cond_broadcast(&this->thread_state_change);
+  pthread_mutex_unlock(&this->lock);
 
   free(hsv_img);
   free(weight);
 
-  pthread_mutex_lock(&this->lock);
-  this->grab_running = NULL;
-  pthread_cond_broadcast(&this->thread_stopped);
-  pthread_mutex_unlock(&this->lock);
+  if (port)
+    _x_post_dec_usage(port);
 
-  _x_post_dec_usage(port);
+  ticket->release(ticket, 0);
 
   llprintf(LOG_1, "grab thread terminated\n");
+
   return NULL;
 }
 
@@ -1078,44 +1136,111 @@ static void apply_gamma_correction(atmo_post_plugin_t *this) {
 
 static void *atmo_output_loop (void *this_gen) {
   atmo_post_plugin_t *this = (atmo_post_plugin_t *) this_gen;
-  post_video_port_t *port = this->port;
   xine_ticket_t *ticket = this->post_plugin.running_ticket;
-  output_driver_t *output_driver = this->output_driver;
-  int colors_size = this->sum_channels * sizeof(rgb_color_t);
-  int running = 1;
+  post_video_port_t *port = NULL;
+  output_driver_t *output_driver = NULL;
+  int colors_size = 0, init = 1;
   int delay_filter_queue_length = 0, delay_filter_queue_pos = 0, filter_delay = 0;
   rgb_color_t *delay_filter_queue = NULL;
-  struct timeval tvnow, tvlast, tvdiff, tvfirst;
-
-  _x_post_inc_usage(port);
+  struct timeval tvnow, tvlast, tvdiff, tvtimeout, tvfirst;
+  struct timespec ts;
+  int thread_state = TS_RUNNING;
 
   pthread_mutex_lock(&this->lock);
-  this->output_running = &running;
-  pthread_cond_broadcast(&this->thread_started);
+  this->output_thread_state = &thread_state;
+  pthread_cond_broadcast(&this->thread_state_change);
   pthread_mutex_unlock(&this->lock);
 
   llprintf(LOG_1, "output thread running\n");
 
   ticket->acquire(ticket, 0);
-  reset_filters(this);
 
-  gettimeofday(&tvfirst, NULL);
+  pthread_mutex_lock(&this->lock);
 
-  while (running) {
+  gettimeofday(&tvlast, NULL);
 
-    if (ticket->ticket_revoked) {
-      reset_filters(this);
-      filter_delay = 0;
-      llprintf(LOG_1, "output thread waiting for new ticket\n");
-      ticket->renew(ticket, 0);
-      llprintf(LOG_1, "output thread got new ticket\n");
-      continue;
+  for (;;) {
+
+      /* Loop with output rate duration */
+    tvdiff.tv_sec = 0;
+    tvdiff.tv_usec = OUTPUT_RATE * 1000;
+    timeradd(&tvlast, &tvdiff, &tvtimeout);
+    gettimeofday(&tvnow, NULL);
+    if (timercmp(&tvtimeout, &tvnow, >)) {
+      ts.tv_sec  = tvtimeout.tv_sec;
+      ts.tv_nsec = tvtimeout.tv_usec;
+      ts.tv_nsec *= 1000;
+      pthread_cond_timedwait(&this->thread_state_change, &this->lock, &ts);
+      gettimeofday(&tvnow, NULL);
+    }
+    tvlast = tvnow;
+
+    if (thread_state == TS_STOP)
+      break;
+
+    if (ticket->ticket_revoked || thread_state == TS_SUSPEND) {
+        /* turn lights off */
+      memset(this->output_colors, 0, colors_size);
+      if (memcmp(this->output_colors, this->last_output_colors, colors_size)) {
+        this->output_driver->output_colors(this->output_driver, this->output_colors, this->last_output_colors);
+        memset(this->last_output_colors, 0, colors_size);
+      }
+      init = 1;
+
+      if (ticket->ticket_revoked) {
+        llprintf(LOG_1, "output thread waiting for new ticket\n");
+
+        thread_state = TS_TICKET_REVOKED;
+        pthread_cond_broadcast(&this->thread_state_change);
+        pthread_mutex_unlock(&this->lock);
+
+        ticket->renew(ticket, 0);
+
+        pthread_mutex_lock(&this->lock);
+        if (thread_state == TS_STOP)
+          break;
+
+        thread_state = TS_RUNNING;
+        pthread_cond_broadcast(&this->thread_state_change);
+
+        llprintf(LOG_1, "output thread got new ticket (revoke=%d)\n", ticket->ticket_revoked);
+
+        gettimeofday(&tvlast, NULL);
+        continue;
+      }
+
+      thread_state = TS_SUSPENDED;
+      pthread_cond_broadcast(&this->thread_state_change);
+
+      llprintf(LOG_1, "output thread suspended\n");
     }
 
-    gettimeofday(&tvlast, NULL);
+    if (thread_state == TS_SUSPENDED || !this->port)
+      continue;
+
+    if (port && port != this->port) {
+      _x_post_dec_usage(port);
+      port = NULL;
+    }
+    if (!port) {
+      port = this->port;
+      _x_post_inc_usage(port);
+    }
+
+    if (init) {
+      init = 0;
+
+      output_driver = this->output_driver;
+      colors_size = this->sum_channels * sizeof(rgb_color_t);
+      reset_filters(this);
+      filter_delay = 0;
+
+      gettimeofday(&tvfirst, NULL);
+
+      llprintf(LOG_1, "output thread resumed\n");
+    }
 
       /* Transfer analyzed colors into filtered colors */
-    pthread_mutex_lock(&this->lock);
     switch (this->active_parm.filter) {
     case 1:
       percent_filter(this);
@@ -1127,10 +1252,10 @@ static void *atmo_output_loop (void *this_gen) {
         /* no filtering */
       memcpy(this->filtered_colors, this->analyzed_colors, colors_size);
     }
+
     pthread_mutex_unlock(&this->lock);
 
-    gettimeofday(&tvnow, NULL);
-    timersub(&tvnow, &tvfirst, &tvdiff);
+    timersub(&tvlast, &tvfirst, &tvdiff);
     if ((tvdiff.tv_sec * 1000 + tvdiff.tv_usec / 1000) >= this->active_parm.start_delay) {
 
         /* Initialize delay filter queue */
@@ -1168,12 +1293,7 @@ static void *atmo_output_loop (void *this_gen) {
       }
     }
 
-      /* Loop with output rate duration */
-    const useconds_t output_rate = OUTPUT_RATE * 1000;
-    gettimeofday(&tvnow, NULL);
-    timersub(&tvnow, &tvlast, &tvdiff);
-    if (tvdiff.tv_sec == 0 && tvdiff.tv_usec < output_rate)
-      usleep(output_rate - tvdiff.tv_usec);
+    pthread_mutex_lock(&this->lock);
 
 #if 0
     {
@@ -1195,23 +1315,19 @@ static void *atmo_output_loop (void *this_gen) {
 #endif
   }
 
-    /* Turn off Light */
-  memset(this->output_colors, 0, colors_size);
-  if (memcmp(this->output_colors, this->last_output_colors, colors_size)) {
-    output_driver->output_colors(output_driver, this->output_colors, this->last_output_colors);
-    memset(this->last_output_colors, 0, colors_size);
-  }
+  llprintf(LOG_1, "output thread terminating\n");
+
+  if (this->output_thread_state == &thread_state)
+    this->output_thread_state = NULL;
+  pthread_cond_broadcast(&this->thread_state_change);
+  pthread_mutex_unlock(&this->lock);
 
   free(delay_filter_queue);
 
+  if (port)
+    _x_post_dec_usage(port);
+
   ticket->release(ticket, 0);
-
-  pthread_mutex_lock(&this->lock);
-  this->output_running = NULL;
-  pthread_cond_broadcast(&this->thread_stopped);
-  pthread_mutex_unlock(&this->lock);
-
-  _x_post_dec_usage(port);
 
   llprintf(LOG_1, "output thread terminated\n");
 
@@ -1278,63 +1394,160 @@ static void free_channels(atmo_post_plugin_t *this) {
 }
 
 
-static void start_threads(atmo_post_plugin_t *this) {
-  int err;
-  pthread_attr_t pth_attrs;
+static int wait_for_thread_state_change(atmo_post_plugin_t *this) {
+  struct timeval tvnow, tvdiff, tvtimeout;
+  struct timespec ts;
 
-  pthread_attr_init(&pth_attrs);
-  pthread_attr_setscope(&pth_attrs, PTHREAD_SCOPE_SYSTEM);
-  pthread_attr_setdetachstate(&pth_attrs, PTHREAD_CREATE_DETACHED);
+  /* calculate absolute timeout time */
+  tvdiff.tv_sec = 0;
+  tvdiff.tv_usec = THREAD_RESPONSE_TIMEOUT;
+  gettimeofday(&tvnow, NULL);
+  timeradd(&tvnow, &tvdiff, &tvtimeout);
+  ts.tv_sec  = tvtimeout.tv_sec;
+  ts.tv_nsec = tvtimeout.tv_usec;
+  ts.tv_nsec *= 1000;
+
+  if (pthread_cond_timedwait(&this->thread_state_change, &this->lock, &ts) == ETIMEDOUT) {
+    xine_log(this->post_plugin.xine, XINE_LOG_PLUGIN, "atmo: timeout while waiting for thread state change!\n");
+    return 0;
+  }
+  return 1;
+}
+
+
+static void start_threads(atmo_post_plugin_t *this) {
 
   pthread_mutex_lock(&this->lock);
-  if (this->grab_running == NULL) {
-    if ((err = pthread_create (&this->grab_thread, &pth_attrs, atmo_grab_loop, this)))
-      xine_log(this->post_plugin.xine, XINE_LOG_PLUGIN, "atmo: can't create grab thread (%s)\n", strerror(err));
-    else
-      pthread_cond_wait(&this->thread_started, &this->lock);
+
+  int grab_running = 0, output_running = 0;
+  if (this->grab_thread_state == NULL || this->output_thread_state == NULL) {
+    pthread_attr_t pth_attrs;
+    pthread_attr_init(&pth_attrs);
+    pthread_attr_setscope(&pth_attrs, PTHREAD_SCOPE_SYSTEM);
+    pthread_attr_setdetachstate(&pth_attrs, PTHREAD_CREATE_DETACHED);
+
+    int err = 0;
+    if (this->grab_thread_state == NULL) {
+      if ((err = pthread_create (&this->grab_thread, &pth_attrs, atmo_grab_loop, this))) {
+        xine_log(this->post_plugin.xine, XINE_LOG_PLUGIN, "atmo: can't create grab thread (%s)\n", strerror(err));
+        grab_running = 1;
+      }
+    }
+    if (!err && this->output_thread_state == NULL) {
+      if ((err = pthread_create (&this->output_thread, &pth_attrs, atmo_output_loop, this))) {
+        xine_log(this->post_plugin.xine, XINE_LOG_PLUGIN, "atmo: can't create output thread (%s)\n", strerror(err));
+        output_running = 1;
+      }
+    }
+
+    pthread_attr_destroy(&pth_attrs);
   }
 
-  if (this->output_running == NULL) {
-    if ((err = pthread_create (&this->output_thread, &pth_attrs, atmo_output_loop, this)))
-      xine_log(this->post_plugin.xine, XINE_LOG_PLUGIN, "atmo: can't create output thread (%s)\n", strerror(err));
-    else
-      pthread_cond_wait(&this->thread_started, &this->lock);
-  }
+  do {
+    int changed = 0;
+    if (!grab_running) {
+      if (this->grab_thread_state) {
+        if (*this->grab_thread_state != TS_TICKET_REVOKED && *this->grab_thread_state != TS_RUNNING) {
+          *this->grab_thread_state = TS_RUNNING;
+          changed = 1;
+        }
+        grab_running = 1;
+      }
+    }
+    if (!output_running) {
+      if (this->output_thread_state) {
+        if (*this->output_thread_state != TS_TICKET_REVOKED && *this->output_thread_state != TS_RUNNING) {
+          *this->output_thread_state = TS_RUNNING;
+          changed = 1;
+        }
+        output_running = 1;
+      }
+    }
+    if (changed)
+      pthread_cond_broadcast(&this->thread_state_change);
+  } while ((!grab_running || !output_running) && wait_for_thread_state_change(this));
+
   pthread_mutex_unlock(&this->lock);
+}
 
-  pthread_attr_destroy(&pth_attrs);
+
+static void suspend_threads(atmo_post_plugin_t *this) {
+
+  pthread_mutex_lock(&this->lock);
+
+  int grab_suspended = 0, output_suspended = 0;
+  do {
+    int changed = 0;
+    if (!grab_suspended) {
+      if (this->grab_thread_state) {
+        if (*this->grab_thread_state == TS_SUSPENDED || *this->grab_thread_state == TS_TICKET_REVOKED) {
+          grab_suspended = 1;
+        } else if (*this->grab_thread_state != TS_SUSPEND) {
+          *this->grab_thread_state = TS_SUSPEND;
+          changed = 1;
+        }
+      } else {
+        grab_suspended = 1;
+      }
+    }
+    if (!output_suspended) {
+      if (this->output_thread_state) {
+        if (*this->output_thread_state == TS_SUSPENDED || *this->output_thread_state == TS_TICKET_REVOKED) {
+          output_suspended = 1;
+        } else if (*this->output_thread_state != TS_SUSPEND) {
+          *this->output_thread_state = TS_SUSPEND;
+          changed = 1;
+        }
+      } else {
+        output_suspended = 1;
+      }
+    }
+    if (changed)
+      pthread_cond_broadcast(&this->thread_state_change);
+  } while ((!grab_suspended || !output_suspended) && wait_for_thread_state_change(this));
+
+  pthread_mutex_unlock(&this->lock);
 }
 
 
 static void stop_threads(atmo_post_plugin_t *this) {
+
   pthread_mutex_lock(&this->lock);
-  if (this->grab_running)
-    *this->grab_running = 0;
-  if (this->output_running)
-    *this->output_running = 0;
-  if (this->grab_running || this->output_running) {
-    struct timeval tvnow, tvdiff, tvtimeout;
-    struct timespec ts;
 
-    /* calculate absolute timeout time */
-    tvdiff.tv_sec = THREAD_TERMINATION_WAIT_TIME / 1000;
-    tvdiff.tv_usec = THREAD_TERMINATION_WAIT_TIME % 1000;
-    tvdiff.tv_usec *= 1000;
-    gettimeofday(&tvnow, NULL);
-    timeradd(&tvnow, &tvdiff, &tvtimeout);
-    ts.tv_sec  = tvtimeout.tv_sec;
-    ts.tv_nsec = tvtimeout.tv_usec;
-    ts.tv_nsec *= 1000;
-
-    while (this->grab_running || this->output_running) {
-      if (pthread_cond_timedwait(&this->thread_stopped, &this->lock, &ts) == ETIMEDOUT) {
-        xine_log(this->post_plugin.xine, XINE_LOG_PLUGIN, "atmo: timeout while waiting for thread stop!\n");
-        break;
+  int grab_stopped = 0, output_stopped = 0;
+  do {
+    int changed = 0;
+    if (!grab_stopped) {
+      if (this->grab_thread_state) {
+        if (*this->grab_thread_state == TS_TICKET_REVOKED) {
+          *this->grab_thread_state = TS_STOP;
+          grab_stopped = 1;
+        } else if (*this->grab_thread_state != TS_STOP) {
+          *this->grab_thread_state = TS_STOP;
+          changed = 1;
+        }
+      } else
+        grab_stopped = 1;
+    }
+    if (!output_stopped) {
+      if (this->output_thread_state) {
+        if (*this->output_thread_state == TS_TICKET_REVOKED) {
+          *this->output_thread_state = TS_STOP;
+          output_stopped = 1;
+        } else if (*this->output_thread_state != TS_STOP) {
+          *this->output_thread_state = TS_STOP;
+          changed = 1;
+        }
+      } else {
+        output_stopped = 1;
       }
     }
-  }
-  this->grab_running = NULL;
-  this->output_running = NULL;
+    if (changed)
+      pthread_cond_broadcast(&this->thread_state_change);
+  } while ((!grab_stopped || !output_stopped) && wait_for_thread_state_change(this));
+
+  this->grab_thread_state = NULL;
+  this->output_thread_state = NULL;
   pthread_mutex_unlock(&this->lock);
 }
 
@@ -1342,11 +1555,13 @@ static void stop_threads(atmo_post_plugin_t *this) {
 static void close_output_driver(atmo_post_plugin_t *this) {
 
   if (this->driver_opened) {
-      /* Switch all channels off */
+    /* turn lights off */
     int colors_size = this->sum_channels * sizeof(rgb_color_t);
     memset(this->output_colors, 0, colors_size);
-    if (memcmp(this->output_colors, this->last_output_colors, colors_size))
+    if (memcmp(this->output_colors, this->last_output_colors, colors_size)) {
       this->output_driver->output_colors(this->output_driver, this->output_colors, this->last_output_colors);
+      memset(this->last_output_colors, 0, colors_size);
+    }
 
     if (this->output_driver->close(this->output_driver))
       xine_log(this->post_plugin.xine, XINE_LOG_PLUGIN, "atmo: output driver: %s!\n", this->output_driver->errmsg);
@@ -1358,12 +1573,14 @@ static void close_output_driver(atmo_post_plugin_t *this) {
 
 static void open_output_driver(atmo_post_plugin_t *this) {
 
-  if (!this->parm.enabled || this->active_parm.driver != this->parm.driver || strcmp(this->active_parm.driver_param, this->parm.driver_param))
+  if (!this->parm.enabled || this->active_parm.driver != this->parm.driver || strcmp(this->active_parm.driver_param, this->parm.driver_param)) {
+    stop_threads(this);
     close_output_driver(this);
+  }
 
   if (this->parm.enabled) {
-    int start = 1;
     atmo_parameters_t parm = this->parm;
+    int start = 1, send = 0;
 
       /* open output driver */
     if (!this->driver_opened) {
@@ -1375,6 +1592,7 @@ static void open_output_driver(atmo_post_plugin_t *this) {
         start = 0;
       } else {
         this->driver_opened = 1;
+        send = 1;
         llprintf(LOG_1, "output driver opened\n");
       }
     } else {
@@ -1401,6 +1619,7 @@ static void open_output_driver(atmo_post_plugin_t *this) {
                     this->active_parm.bottom_right != this->parm.bottom_right) {
       free_channels(this);
       config_channels(this);
+      send = 1;
     }
 
     this->active_parm = this->parm;
@@ -1410,10 +1629,12 @@ static void open_output_driver(atmo_post_plugin_t *this) {
 
     if (start) {
         /* send first initial color packet */
-      this->output_driver->output_colors(this->output_driver, this->output_colors, NULL);
+      if (send)
+        this->output_driver->output_colors(this->output_driver, this->output_colors, NULL);
 
       start_threads(this);
-    }
+    } else
+      stop_threads(this);
   }
 }
 
@@ -1426,6 +1647,7 @@ static void atmo_video_open(xine_video_port_t *port_gen, xine_stream_t *stream) 
   post_video_port_t *port = (post_video_port_t *)port_gen;
   atmo_post_plugin_t *this = (atmo_post_plugin_t *) port->post;
 
+  llprintf(LOG_1, "video open\n");
   _x_post_rewire(port->post);
   _x_post_inc_usage(port);
 
@@ -1433,8 +1655,10 @@ static void atmo_video_open(xine_video_port_t *port_gen, xine_stream_t *stream) 
   (port->original_port->open) (port->original_port, stream);
   port->stream = stream;
   this->port = port;
+
   open_output_driver(this);
   pthread_mutex_unlock(&this->port_lock);
+  llprintf(LOG_1, "video opened\n");
 }
 
 
@@ -1442,14 +1666,17 @@ static void atmo_video_close(xine_video_port_t *port_gen, xine_stream_t *stream)
   post_video_port_t *port = (post_video_port_t *)port_gen;
   atmo_post_plugin_t *this = (atmo_post_plugin_t *) port->post;
 
+  llprintf(LOG_1, "video close\n");
   pthread_mutex_lock(&this->port_lock);
-  stop_threads(this);
+  suspend_threads(this);
+
   this->port = NULL;
   port->original_port->close(port->original_port, stream);
   port->stream = NULL;
   pthread_mutex_unlock(&this->port_lock);
 
   _x_post_dec_usage(port);
+  llprintf(LOG_1, "video closed\n");
 }
 
 
@@ -1535,17 +1762,21 @@ static char *atmo_get_help(void) {
 
 static void atmo_dispose(post_plugin_t *this_gen)
 {
-  if (_x_post_dispose(this_gen)) {
-    atmo_post_plugin_t *this = (atmo_post_plugin_t *) this_gen;
+  atmo_post_plugin_t *this = (atmo_post_plugin_t *) this_gen;
 
+  llprintf(LOG_1, "dispose plugin\n");
+  stop_threads(this);
+
+  if (_x_post_dispose(this_gen)) {
     close_output_driver(this);
     free_channels(this);
     pthread_mutex_destroy(&this->lock);
     pthread_mutex_destroy(&this->port_lock);
-    pthread_cond_destroy(&this->thread_started);
-    pthread_cond_destroy(&this->thread_stopped);
+    pthread_cond_destroy(&this->thread_state_change);
     free(this);
+    llprintf(LOG_1, "final dispose\n");
   }
+  llprintf(LOG_1, "disposed plugin\n");
 }
 
 
@@ -1562,6 +1793,8 @@ static post_plugin_t *atmo_open_plugin(post_class_t *class_gen,
   static xine_post_api_t post_api =
       { atmo_set_parameters, atmo_get_parameters,
         atmo_get_param_descr, atmo_get_help };
+
+  llprintf(LOG_1, "open plugin\n");
 
   if (!video_target || !video_target[0])
     return NULL;
@@ -1594,8 +1827,7 @@ static post_plugin_t *atmo_open_plugin(post_class_t *class_gen,
 
   pthread_mutex_init(&this->lock, NULL);
   pthread_mutex_init(&this->port_lock, NULL);
-  pthread_cond_init(&this->thread_started, NULL);
-  pthread_cond_init(&this->thread_stopped, NULL);
+  pthread_cond_init(&this->thread_state_change, NULL);
 
     /* Set default values for parameters */
   this->parm.enabled = 1;
@@ -1634,6 +1866,7 @@ static post_plugin_t *atmo_open_plugin(post_class_t *class_gen,
   if (!param || strcmp(param, buf))
     config->update_string(config, "post.atmo.parameters", buf);
 
+  llprintf(LOG_1, "plugin opened\n");
   return &this->post_plugin;
 }
 
