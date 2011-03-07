@@ -153,9 +153,6 @@ overscan *         30               Ignored overscan border of grabbed video fra
                                     from the controller configuration data. Use the DF10CH setup program to configure your
                                     desired overscan.
                                     
-                                    Note: Because of restrictions of the implementation of the df-xine-lib-extensions patch
-                                    this parameter is only supported when using the VDPAU output driver.
-                                    
 edge_weighting *   60               Power of edge weighting.
 																		Value is divided by 10 e.g. 80 -> power of 8
 																		Valid values 10 ... 200
