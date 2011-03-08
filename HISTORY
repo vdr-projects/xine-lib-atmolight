@@ -1,5 +1,8 @@
 --- Version 0.8
-Added support for df-xine-lib-extensions patch
+Added support for df-xine-lib-extensions patch. Now this plugin can also be used with other xine output drivers (e.g. xv)
+thanks to the new frame grabbing support of the df-xine-lib-extensions patch for these output drivers.
+Fix and optimize handling of grab and output thread. Now the delay on video port open/close action that is caused by the
+plugin should be lesser than in previous versions resulting in (for vdr) faster channel switching and jumping within recordings.
 
 --- Version 0.7
 Added output delay filter which is configurable with new plugin parameter 'filter_delay'.
