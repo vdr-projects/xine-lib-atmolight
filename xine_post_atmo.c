@@ -36,6 +36,10 @@
 
 #include <xine/post.h>
 
+#ifndef HAVE_XINE_GRAB_VIDEO_FRAME
+#error xine-lib does not have df-xine-lib-extensions patch!
+#endif
+
 extern long int lround(double); /* Missing in math.h? */
 
 #undef LOG_MODULE
@@ -759,11 +763,7 @@ static void *atmo_grab_loop (void *this_gen) {
   xine_ticket_t *ticket = this->post_plugin.running_ticket;
   post_video_port_t *port = NULL;
   xine_video_port_t *video_port = NULL;
-#ifdef HAVE_XINE_VO_GRAB_FRAME
-  vo_grab_frame_t *frame = NULL;
-#else
-  xine_grab_frame_t *frame = NULL;
-#endif
+  xine_grab_video_frame_t *frame = NULL;
   int rc;
   int grab_width, grab_height, analyze_width, analyze_height, overscan, img_size;
   int last_analyze_width = 0, last_analyze_height = 0;
@@ -810,11 +810,7 @@ static void *atmo_grab_loop (void *this_gen) {
     if (ticket->ticket_revoked || thread_state == TS_SUSPEND) {
         /* free grab frame */
       if (frame) {
-#ifdef HAVE_XINE_VO_GRAB_FRAME
         frame->dispose(frame);
-#else
-        xine_port_send_gui_data(video_port, XINE_GUI_SEND_FREE_GRAB_FRAME, frame);
-#endif
         frame = NULL;
       }
 
@@ -861,15 +857,8 @@ static void *atmo_grab_loop (void *this_gen) {
 
       /* allocate grab frame */
     if (!frame) {
-#ifdef HAVE_XINE_VO_GRAB_FRAME
-      if (video_port->driver->new_grab_frame)
-        frame = video_port->driver->new_grab_frame(video_port->driver);
-      else
-        frame = video_port->new_grab_frame(video_port);
+      frame = xine_new_grab_video_frame(port->stream);
       if (!frame) {
-#else
-      if (xine_port_send_gui_data(video_port, XINE_GUI_SEND_ALLOC_GRAB_FRAME, &frame)) {
-#endif
         xine_log(this->post_plugin.xine, XINE_LOG_PLUGIN, "atmo: frame grabbing not supported!\n");
         break;
       }
@@ -906,13 +895,8 @@ static void *atmo_grab_loop (void *this_gen) {
       frame->timeout = GRAB_TIMEOUT;
       frame->width = analyze_width;
       frame->height = analyze_height;
-#ifdef HAVE_XINE_VO_GRAB_FRAME
-      frame->flags = VO_GRAB_FRAME_FLAGS_CONTINUOUS | VO_GRAB_FRAME_FLAGS_WAIT_NEXT;
+      frame->flags = XINE_GRAB_VIDEO_FRAME_FLAGS_CONTINUOUS | XINE_GRAB_VIDEO_FRAME_FLAGS_WAIT_NEXT;
       if (!(rc = frame->grab(frame))) {
-#else
-      frame->continuous = 1;
-      if (!(rc = xine_port_send_gui_data(video_port, XINE_GUI_SEND_GRAB_FRAME, frame))) {
-#endif
         if (frame->width == analyze_width && frame->height == analyze_height) {
           img_size = analyze_width * analyze_height;
 
@@ -992,11 +976,7 @@ static void *atmo_grab_loop (void *this_gen) {
 
     /* free grab frame */
   if (frame) {
-#ifdef HAVE_XINE_VO_GRAB_FRAME
     frame->dispose(frame);
-#else
-    xine_port_send_gui_data(video_port, XINE_GUI_SEND_FREE_GRAB_FRAME, frame);
-#endif
   }
 
   if (this->grab_thread_state == &thread_state)
